@@ -349,6 +349,10 @@ class MainScene extends Phaser.Scene {
   }
 
   create() {
+    // Generate all procedural textures FIRST — without these, sprites can't render
+    this.createTextures();
+    console.log('[StarBlaster] Textures generated:', Object.keys(this.textures).slice(-15));
+
     this.score = 0;
     this.lives = 3;
     this.wave = 1;
