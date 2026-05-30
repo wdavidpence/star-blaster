@@ -10,12 +10,14 @@
   canvas { display: block; }
   #hud { position: absolute; top: 10px; left: 0; right: 0; z-index: 10; pointer-events: none; padding: 0 20px; display: flex; justify-content: space-between; font-family: 'Courier New', monospace; }
   #hud div { color: #0ff; text-shadow: 0 0 8px #0ff; font-size: 16px; line-height: 1.4; }
+  #comboText { position: absolute; top: 55px; left: 20px; z-index: 10; pointer-events: none; color: #ff0; text-shadow: 0 0 12px #ff0; font-family: 'Courier New', monospace; font-size: 18px; opacity: 0; transition: opacity 0.3s; }
   #overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); }
   #overlay h1 { color: #0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 20px #0ff; margin-bottom: 10px; font-size: 32px; }
   #overlay p { color: #aaa; font-family: 'Courier New', monospace; margin-bottom: 8px; font-size: 14px; }
   #overlay button { background: transparent; border: 2px solid #0ff; color: #0ff; padding: 15px 40px; font-family: 'Courier New', monospace; font-size: 18px; cursor: pointer; margin-top: 20px; text-shadow: 0 0 10px #0ff; box-shadow: 0 0 15px rgba(0,255,255,0.3); }
   #overlay button:hover { background: rgba(0,255,255,0.15); }
   #overlay .score-display { color: #ff0; font-size: 24px; margin-top: 10px; text-shadow: 0 0 15px #ff0; }
+  #overlay .high-score { color: #f80; font-size: 16px; margin-top: 5px; text-shadow: 0 0 10px #f80; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
 </head>
@@ -26,6 +28,8 @@
   <div><span id="waveText">WAVE 1</span></div>
   <div><span id="livesText">♥ ♥ ♥</span></div>
 </div>
+
+<div id="comboText"></div>
 
 <div id="overlay" style="display:flex;">
   <h1>STAR BLASTER</h1>
@@ -38,13 +42,141 @@
 const W = () => window.innerWidth;
 const H = () => window.innerHeight;
 
+// --- Audio Synthesizer (no external files needed) ---
+class SoundFX {
+  constructor(ctx) { this.ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); }
+  
+  shoot() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.exponentialRampToValueAtTime(440, t + 0.1);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.start(t); osc.stop(t + 0.12);
+  }
+
+  explosion() {
+    const c = this.ctx, t = c.currentTime;
+    const bufferSize = Math.floor(c.sampleRate * 0.3);
+    const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+    }
+    const source = c.createBufferSource();
+    source.buffer = buffer;
+    const gain = c.createGain();
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1000, t);
+    filter.frequency.exponentialRampToValueAtTime(200, t + 0.3);
+    source.connect(filter); filter.connect(gain); gain.connect(c.destination);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    source.start(t); source.stop(t + 0.35);
+  }
+
+  bigExplosion() {
+    const c = this.ctx, t = c.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const bufferSize = Math.floor(c.sampleRate * 0.4);
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let j = 0; j < bufferSize; j++) {
+        data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / bufferSize, 1.5);
+      }
+      const source = c.createBufferSource();
+      source.buffer = buffer;
+      const gain = c.createGain();
+      const filter = c.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, t + i * 0.1);
+      filter.frequency.exponentialRampToValueAtTime(150, t + i * 0.1 + 0.4);
+      source.connect(filter); filter.connect(gain); gain.connect(c.destination);
+      gain.gain.setValueAtTime(i === 0 ? 0.35 : 0.25, t + i * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.45);
+      source.start(t + i * 0.1); source.stop(t + i * 0.1 + 0.45);
+    }
+  }
+
+  powerup() {
+    const c = this.ctx, t = c.currentTime;
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t + i * 0.08);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.15, t + i * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.2);
+      osc.start(t + i * 0.08); osc.stop(t + i * 0.08 + 0.25);
+    });
+  }
+
+  hit() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    osc.start(t); osc.stop(t + 0.15);
+  }
+
+  gameOver() {
+    const c = this.ctx, t = c.currentTime;
+    [440, 392, 349, 330].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t + i * 0.25);
+      gain.gain.setValueAtTime(0.18, t + i * 0.25);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.25 + 0.4);
+      osc.start(t + i * 0.25); osc.stop(t + i * 0.25 + 0.45);
+    });
+  }
+
+  wave() {
+    const c = this.ctx, t = c.currentTime;
+    [330, 440, 660].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + i * 0.12);
+      gain.gain.setValueAtTime(0.1, t + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.3);
+      osc.start(t + i * 0.12); osc.stop(t + i * 0.12 + 0.35);
+    });
+  }
+
+  combo() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1200, t);
+    osc.frequency.exponentialRampToValueAtTime(1600, t + 0.05);
+    gain.gain.setValueAtTime(0.1, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc.start(t); osc.stop(t + 0.1);
+  }
+}
+
+let sfx;
+
 class MainScene extends Phaser.Scene {
   constructor() { super('MainScene'); }
 
   createTextures() {
     const g = this.make.graphics({ x: 0, y: 0, add: false });
 
-    // Player ship - triangle with engine glow
+    // Player ship - sleek triangle with wing accents
+    g.clear();
     g.fillStyle(0x00ffc8, 1);
     g.beginPath();
     g.moveTo(24, 0);
@@ -53,9 +185,20 @@ class MainScene extends Phaser.Scene {
     g.lineTo(48, 56);
     g.closePath();
     g.fillPath();
+    // Wing detail lines
+    g.lineStyle(1.5, 0x00aa88, 0.8);
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(8, 48);
+    g.strokePath();
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(40, 48);
+    g.strokePath();
     this.generateTexture('ship', 48, 56);
 
-    // Engine glow
+    // Engine glow - animated flame
+    g.clear();
     g.fillStyle(0x00aaff, 1);
     g.beginPath();
     g.moveTo(12, 56);
@@ -65,7 +208,7 @@ class MainScene extends Phaser.Scene {
     g.fillPath();
     this.generateTexture('engine', 48, 72);
 
-    // Enemy type A - red diamond
+    // Enemy type A - red diamond with inner detail
     g.clear();
     g.fillStyle(0xff3344, 1);
     g.beginPath();
@@ -75,9 +218,17 @@ class MainScene extends Phaser.Scene {
     g.lineTo(0, 24);
     g.closePath();
     g.fillPath();
+    g.lineStyle(1.5, 0xff6677, 0.6);
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(40, 24);
+    g.lineTo(24, 40);
+    g.lineTo(8, 24);
+    g.closePath();
+    g.strokePath();
     this.generateTexture('enemyA', 48, 48);
 
-    // Enemy type B - purple hexagon
+    // Enemy type B - purple hexagon with core
     g.clear();
     g.fillStyle(0xcc33ff, 1);
     g.beginPath();
@@ -89,9 +240,20 @@ class MainScene extends Phaser.Scene {
     }
     g.closePath();
     g.fillPath();
+    // Inner hexagon
+    g.lineStyle(1.5, 0xff66ff, 0.5);
+    g.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2;
+      const x = 24 + 14 * Math.cos(angle);
+      const y = 24 + 14 * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.strokePath();
     this.generateTexture('enemyB', 48, 48);
 
-    // Enemy type C - big boss
+    // Enemy type C - big boss octagon with core glow
     g.clear();
     g.fillStyle(0xff6600, 1);
     g.beginPath();
@@ -104,49 +266,84 @@ class MainScene extends Phaser.Scene {
     }
     g.closePath();
     g.fillPath();
+    // Core circle
+    g.fillStyle(0xffaa44, 1);
+    g.beginPath();
+    g.arc(36, 36, 12, 0, Math.PI * 2);
+    g.fillPath();
     this.generateTexture('enemyC', 72, 72);
 
-    // Bullet - cyan line
+    // Bullet - cyan beam with glow
     g.clear();
-    g.fillStyle(0x00ffff, 1);
+    g.fillStyle(0x88ffff, 1);
     g.fillRect(3, 0, 6, 24);
+    g.fillStyle(0xffffff, 1);
+    g.fillRect(5, 2, 2, 20);
     this.generateTexture('bullet', 6, 24);
 
-    // Enemy bullet - red line
+    // Enemy bullet - red beam
     g.clear();
     g.fillStyle(0xff4444, 1);
     g.fillRect(3, 0, 6, 18);
+    g.fillStyle(0xffaaaa, 1);
+    g.fillRect(5, 2, 2, 14);
     this.generateTexture('enemyBullet', 6, 18);
 
-    // Powerup - green circle with ring
+    // Powerup - green circle with ring and sparkle
     g.clear();
-    g.lineStyle(2, 0x00ff00, 1);
+    g.lineStyle(3, 0x00ff00, 1);
     g.fillStyle(0x00ff00, 1);
     g.fillCircle(16, 16, 14);
+    // Sparkle cross
+    g.lineStyle(2, 0xffffff, 0.8);
+    g.beginPath(); g.moveTo(16, 5); g.lineTo(16, 27); g.strokePath();
+    g.beginPath(); g.moveTo(5, 16); g.lineTo(27, 16); g.strokePath();
     this.generateTexture('powerup', 32, 32);
 
-    // Explosion particles
+    // Explosion particles - multi-layered
     g.clear();
     g.fillStyle(0xffaa00, 1);
-    g.beginPath();
-    g.arc(8, 8, 8, 0, Math.PI * 2);
-    g.fillPath();
+    g.beginPath(); g.arc(8, 8, 8, 0, Math.PI * 2); g.fillPath();
     this.generateTexture('explosion', 16, 16);
 
-    // Star particle
+    // Small explosion flash
+    g.clear();
+    g.fillStyle(0xffff88, 1);
+    g.beginPath(); g.arc(4, 4, 4, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('flash', 8, 8);
+
+    // Star particle (background)
     g.clear();
     g.fillStyle(0xffffff, 1);
-    g.beginPath();
-    g.arc(3, 3, 3, 0, Math.PI * 2);
-    g.fillPath();
+    g.beginPath(); g.arc(3, 3, 3, 0, Math.PI * 2); g.fillPath();
     this.generateTexture('star', 6, 6);
 
-    // Shield visual
+    // Shield visual - pulsing hexagon
     g.clear();
     g.lineStyle(3, 0x00ff88, 1);
     g.fillStyle(0x00ff88, 0.2);
-    g.fillCircle(24, 24, 36);
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2;
+      const x = 24 + 36 * Math.cos(angle);
+      const y = 24 + 36 * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.fillPath();
+    g.strokePath();
     this.generateTexture('shield', 48, 48);
+
+    // Trail particle for ship
+    g.clear();
+    g.fillStyle(0x00ccff, 1);
+    g.beginPath(); g.arc(3, 3, 3, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('trail', 6, 6);
+
+    // Score popup text background (circle)
+    g.clear();
+    g.fillStyle(0x000000, 0.5);
+    g.beginPath(); g.arc(18, 18, 18, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('scoreBg', 36, 36);
 
     g.destroy();
   }
@@ -155,27 +352,42 @@ class MainScene extends Phaser.Scene {
     this.score = 0;
     this.lives = 3;
     this.wave = 1;
-    this.waveTimer = 0;
-    this.enemySpawnRate = 1200;
     this.gameOver = false;
     this.shieldActive = false;
-    this.shieldTimer = 0;
     this.speedBoost = false;
-    this.speedTimer = 0;
+    this.comboCount = 0;
+    this.comboTimer = 0;
+    this.highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
 
-    // Background starfield
+    // Background starfield - multi-layer parallax
     this.stars = [];
-    for (let i = 0; i < 80; i++) {
-      const star = this.add.sprite(
-        Phaser.Math.Between(0, W()),
-        Phaser.Math.Between(0, H()),
-        'star'
-      );
-      star.setAlpha(Phaser.Math.FloatBetween(0.3, 1));
-      star.setDepth(1);
-      star.twinkleSpeed = Phaser.Math.FloatBetween(0.5, 2);
-      this.stars.push(star);
+    for (let layer = 0; layer < 3; layer++) {
+      const count = [60, 40, 25][layer];
+      const speed = [1.5, 3, 5][layer];
+      const size = [6, 4, 3][layer];
+      for (let i = 0; i < count; i++) {
+        const star = this.add.sprite(
+          Phaser.Math.Between(0, W()),
+          Phaser.Math.Between(0, H()),
+          'star'
+        );
+        star.setAlpha(Phaser.Math.FloatBetween(0.3, 1));
+        star.setDepth(layer + 1);
+        star.twinkleSpeed = Phaser.Math.FloatBetween(0.5, 2);
+        star.layer = layer;
+        star.speed = speed;
+        star.size = size;
+        this.stars.push(star);
+      }
     }
+
+    // Nebula background glow
+    const nebula = this.add.graphics();
+    nebula.fillStyle(0x1a0a3a, 0.3);
+    nebula.fillCircle(W() * 0.7, H() * 0.3, 200);
+    nebula.fillStyle(0x0a2a4a, 0.2);
+    nebula.fillCircle(W() * 0.3, H() * 0.6, 150);
+    this.nebula = nebula;
 
     // Groups
     this.bullets = this.physics.add.group({ defaultKey: 'bullet', maxSize: 30 });
@@ -193,17 +405,19 @@ class MainScene extends Phaser.Scene {
     this.engine = this.add.sprite(this.ship.x, this.ship.y + 28, 'engine');
     this.engine.setDepth(4);
 
+    // Ship trail particles (spawned in update)
+    this.trailTimer = 0;
+
     // Touch input zones
     this.touchLeft = false;
     this.touchRight = false;
     this.touchShoot = false;
+    this.shootCooldown = false;
 
-    const third = W() / 3;
+    const sw = W();
     this.input.on('pointerdown', (p) => {
       if (this.gameOver) return;
-      const x = p.x * (W() / this.scale.width);
-      const y = p.y * (H() / this.scale.height);
-      const sw = W();
+      const x = p.x * (sw / this.scale.width);
       if (x < sw / 3) this.touchLeft = true;
       else if (x > sw * 2 / 3) this.touchRight = true;
       else this.touchShoot = true;
@@ -219,10 +433,10 @@ class MainScene extends Phaser.Scene {
     this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
     this.physics.add.overlap(this.ship, this.enemies, this.hitShip, null, this);
     this.physics.add.overlap(this.ship, this.enemyBullets, this.hitShip, null, this);
-    this.physics.add.overlap(this.ship, this.powerups, this.collectPowerup, null, this);
 
     // Powerup group (hidden until needed)
     this.powerups = this.physics.add.group({ defaultKey: 'powerup', maxSize: 5 });
+    this.physics.add.overlap(this.ship, this.powerups, this.collectPowerup, null, this);
 
     // HUD update interval
     this.time.addEvent({ delay: 100, repeat: -1, callback: () => {
@@ -232,6 +446,15 @@ class MainScene extends Phaser.Scene {
         let hearts = '';
         for (let i = 0; i < this.lives; i++) hearts += '♥ ';
         document.getElementById('livesText').textContent = hearts || 'NO LIVES';
+
+        // Combo display
+        const comboEl = document.getElementById('comboText');
+        if (this.comboCount >= 3) {
+          comboEl.textContent = `COMBO x${this.comboCount}!`;
+          comboEl.style.opacity = Math.min(1, this.comboTimer / 2000);
+        } else {
+          comboEl.style.opacity = '0';
+        }
       }
     }});
 
@@ -240,18 +463,21 @@ class MainScene extends Phaser.Scene {
       if (!this.gameOver) {
         this.wave++;
         this.enemySpawnRate = Math.max(400, this.enemySpawnRate - 150);
-        document.getElementById('waveText').textContent = `WAVE ${this.wave}`;
 
-        // Flash wave notification
+        // Flash wave notification with sound
         const waveText = this.add.text(W() / 2, H() / 2, `WAVE ${this.wave}`, {
           fontSize: '48px', fontFamily: 'Courier New', color: '#0ff'
         }).setOrigin(0.5).setDepth(15);
         waveText.setAlpha(1);
-        this.tweens.add({ targets: waveText, alpha: 0, duration: 2000, ease: 'Linear' });
+        this.tweens.add({ targets: waveText, alpha: 0, scale: 2, duration: 2000, ease: 'Linear',
+          callback: () => waveText.destroy() });
+
+        if (sfx) sfx.wave();
       }
     }});
 
     // Enemy spawning
+    this.enemySpawnRate = 1200;
     this.time.addEvent({ delay: this.enemySpawnRate, repeat: -1, callback: () => {
       if (!this.gameOver) this.spawnEnemy();
     }});
@@ -260,38 +486,82 @@ class MainScene extends Phaser.Scene {
     this.time.addEvent({ delay: 3000, repeat: -1, callback: () => {
       if (!this.gameOver && this.wave >= 2) this.enemyShoot();
     }});
+
+    // Combo decay timer
+    this.comboTimer = 0;
+    this.time.addEvent({ delay: 50, repeat: -1, callback: () => {
+      if (this.comboCount > 0 && !this.gameOver) {
+        this.comboTimer -= 50;
+        if (this.comboTimer <= 0) {
+          this.comboCount = 0;
+          this.comboTimer = 0;
+        }
+      }
+    }});
+
+    // Engine flicker animation
+    this.tweens.add({
+      targets: this.engine, alpha: 0.5, duration: 200, yoyo: true, repeat: -1, ease: 'Sine'
+    });
   }
 
   update() {
     if (this.gameOver) return;
 
-    // Star parallax
+    // Star parallax with layer speed
     const t = this.time.now / 1000;
     this.stars.forEach(s => {
-      s.y += s.twinkleSpeed * 1.5;
+      s.y += s.speed * 1.5;
       if (s.y > H() + 10) { s.y = -10; s.x = Phaser.Math.Between(0, W()); }
       const flicker = Math.sin(t * s.twinkleSpeed * 3) * 0.3 + 0.7;
       s.setAlpha(flicker);
     });
 
-    // Ship movement
+    // Nebula slow drift
+    if (this.nebula) {
+      this.nebula.x += Math.sin(t * 0.2) * 0.15;
+      this.nebula.y += Math.cos(t * 0.15) * 0.1;
+    }
+
+    // Ship movement with smooth acceleration feel
     const speed = this.speedBoost ? 500 : 350;
     if (this.touchLeft) {
       this.ship.setVelocityX(-speed);
     } else if (this.touchRight) {
       this.ship.setVelocityX(speed);
     } else {
-      this.ship.setVelocityX(0);
+      // Smooth deceleration
+      this.ship.setVelocityX(this.ship.body.velocity.x * 0.85);
     }
 
     // Clamp ship position
     const margin = 30;
-    if (this.ship.x < margin) this.ship.x = margin;
-    if (this.ship.x > W() - margin) this.ship.x = W() - margin;
+    if (this.ship.x < margin) { this.ship.x = margin; this.ship.setVelocityX(0); }
+    if (this.ship.x > W() - margin) { this.ship.x = W() - margin; this.ship.setVelocityX(0); }
 
     // Update engine glow
     this.engine.x = this.ship.x;
     this.engine.y = this.ship.y + 28;
+
+    // Ship trail particles when moving
+    if (Math.abs(this.ship.body.velocity.x) > 50 && !this.gameOver) {
+      this.trailTimer += 16;
+      if (this.trailTimer > 40) {
+        const trail = this.add.sprite(
+          this.ship.x + Phaser.Math.Between(-8, 8),
+          this.ship.y + 35,
+          'trail'
+        );
+        trail.setDepth(3);
+        trail.setAlpha(0.6);
+        trail.body.allowGravity = false;
+        this.tweens.add({
+          targets: trail, alpha: 0, y: this.ship.y + 80, duration: 500, ease: 'Linear',
+          callback: () => trail.destroy()
+        });
+        this.trailTimer = 0;
+      }
+    }
 
     // Shooting
     if (this.touchShoot && !this.shootCooldown) {
@@ -305,7 +575,8 @@ class MainScene extends Phaser.Scene {
       this.shieldTimer -= 16;
       if (this.shieldTimer <= 0) {
         this.shieldActive = false;
-        if (this.ship.getChildByIndex(0)) this.ship.removeChildAt(0);
+        const shieldSprite = this.ship.getChildByIndex(0);
+        if (shieldSprite) { shieldSprite.destroy(); }
       } else {
         // Pulse shield
         const pulse = Math.sin(this.time.now / 200) * 0.3 + 0.7;
@@ -330,17 +601,27 @@ class MainScene extends Phaser.Scene {
     this.enemyBullets.children.each(b => {
       if (b.y > H() + 30 || b.y < -30 || b.x < -30 || b.x > W() + 30) b.destroy();
     });
-    this.enemies.children.forEach(e => {
-      if (e.y > H() + 60) e.destroy();
-    });
 
-    // Enemy movement & sway
+    // Enemy movement & patterns
     this.enemies.children.forEach(e => {
       if (!e.active) return;
-      const t = this.time.now / 1000;
-      e.x += Math.sin(t * 2 + e.getData('phase')) * (e.getData('speed') || 1);
+      const et = this.time.now / 1000;
+      const phase = e.getData('phase');
+      const pattern = e.getData('pattern') || 'straight';
 
-      // Move enemies down slowly
+      switch (pattern) {
+        case 'sine':
+          e.x += Math.sin(et * 2 + phase) * (e.getData('speed') || 1.5);
+          break;
+        case 'zigzag':
+          e.x += Math.sign(Math.sin(et * 3 + phase)) * (e.getData('speed') || 2);
+          break;
+        default: // straight with slight drift
+          e.x += Math.sin(et * 1.5 + phase) * (e.getData('speed') || 1);
+          break;
+      }
+
+      // Move enemies down
       e.y += (e.getData('fallSpeed') || 0.5) * 16;
 
       if (e.y > H() + 80) {
@@ -356,20 +637,41 @@ class MainScene extends Phaser.Scene {
       bullet.setVelocityY(-600);
       bullet.body.allowGravity = false;
     }
+
+    // Side bullets at higher waves
+    if (this.wave >= 3 && this.comboCount >= 5) {
+      const leftBullet = this.bullets.get(this.ship.x - 12, this.ship.y - 20);
+      if (leftBullet) {
+        leftBullet.setActive(true).setVisible(true);
+        leftBullet.setVelocity(-80, -550);
+        leftBullet.body.allowGravity = false;
+      }
+      const rightBullet = this.bullets.get(this.ship.x + 12, this.ship.y - 20);
+      if (rightBullet) {
+        rightBullet.setActive(true).setVisible(true);
+        rightBullet.setVelocity(80, -550);
+        rightBullet.body.allowGravity = false;
+      }
+    }
+
+    if (sfx) sfx.shoot();
   }
 
   spawnEnemy() {
     const types = ['enemyA', 'enemyB'];
     let type = Phaser.Utils.Array.GetRandom(types);
     let hp = 1;
+    let pattern = 'straight';
 
     // Boss in later waves
     if (this.wave >= 3 && Math.random() < 0.2) {
       type = 'enemyC';
       hp = 5;
-    } else if (this.wave >= 2 && Math.random() < 0.3) {
+      pattern = 'sine';
+    } else if (this.wave >= 2 && Math.random() < 0.4) {
       type = 'enemyB';
       hp = 2;
+      pattern = Phaser.Utils.Array.GetRandom(['sine', 'zigzag']);
     }
 
     const enemy = this.enemies.get(Phaser.Math.Between(40, W() - 40), -50, type);
@@ -379,6 +681,11 @@ class MainScene extends Phaser.Scene {
       enemy.setData('phase', Math.random() * Math.PI * 2);
       enemy.setData('speed', Phaser.Math.FloatBetween(1, 3));
       enemy.setData('fallSpeed', Phaser.Math.FloatBetween(0.5, 1.5 + this.wave * 0.2));
+      enemy.setData('pattern', pattern);
+
+      // Spawn animation - scale in
+      enemy.setScale(0);
+      this.tweens.add({ targets: enemy, scale: 1, duration: 300, ease: 'Back' });
     }
   }
 
@@ -386,16 +693,30 @@ class MainScene extends Phaser.Scene {
     const aliveEnemies = this.enemies.children.filter(e => e.active);
     if (aliveEnemies.length === 0) return;
 
-    // Pick a random enemy to shoot
-    const shooter = Phaser.Utils.Array.GetRandom(aliveEnemies);
-    if (!shooter) return;
+    // Pick enemies to shoot - more in later waves
+    const numShooters = Math.min(aliveEnemies.length, this.wave >= 4 ? 3 : 2);
+    for (let i = 0; i < numShooters; i++) {
+      const shooter = Phaser.Utils.Array.GetRandom(aliveEnemies);
+      if (!shooter) continue;
 
-    const bullet = this.enemyBullets.get(shooter.x, shooter.y + 24);
-    if (bullet) {
-      bullet.setActive(true).setVisible(true);
-      bullet.setVelocityY(300 + this.wave * 30);
-      bullet.body.allowGravity = false;
+      const bullet = this.enemyBullets.get(shooter.x, shooter.y + 24);
+      if (bullet) {
+        bullet.setActive(true).setVisible(true);
+        bullet.setVelocityY(300 + this.wave * 30);
+        bullet.body.allowGravity = false;
+
+        // Aim toward player for accuracy in later waves
+        if (this.wave >= 5) {
+          const dx = this.ship.x - shooter.x;
+          const dy = this.ship.y - shooter.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const speed = 300 + this.wave * 30;
+          bullet.setVelocity(dx / dist * speed, dy / dist * speed);
+        }
+      }
     }
+
+    if (sfx) sfx.hit();
   }
 
   hitEnemy(bullets, enemy) {
@@ -404,29 +725,56 @@ class MainScene extends Phaser.Scene {
     const hp = enemy.getData('hp') - 1;
     enemy.setData('hp', hp);
 
-    // Explosion effect
-    this.createExplosion(enemy.x, enemy.y);
+    // Hit flash effect
+    enemy.setTint(0xffffff);
+    this.tweens.add({ targets: enemy, tint: 0xcccccc, duration: 50, callback: () => { enemy.clearTint(); }});
 
     if (hp <= 0) {
+      // Combo tracking
+      this.comboCount++;
+      this.comboTimer = 2000;
+      const comboMultiplier = Math.min(this.comboCount, 10);
+      let points = enemy.textureKey === 'enemyC' ? 50 : enemy.textureKey === 'enemyB' ? 20 : 10;
+      this.score += points * comboMultiplier;
+
+      // Big explosion for bosses
+      if (enemy.textureKey === 'enemyC') {
+        this.createExplosion(enemy.x, enemy.y, true);
+        this.cameras.main.shake(300, 0.02);
+        if (sfx) sfx.bigExplosion();
+      } else {
+        this.createExplosion(enemy.x, enemy.y, false);
+        this.cameras.main.shake(100, 0.01);
+        if (sfx) sfx.explosion();
+      }
+
+      // Score popup text
+      const scoreText = this.add.text(enemy.x, enemy.y - 20, `+${points * comboMultiplier}`, {
+        fontSize: '20px', fontFamily: 'Courier New', color: '#ff0'
+      }).setOrigin(0.5).setDepth(8);
+      scoreText.setAlpha(1);
+      this.tweens.add({ targets: scoreText, y: enemy.y - 60, alpha: 0, duration: 1000, ease: 'Linear',
+        callback: () => scoreText.destroy() });
+
+      // Combo sound for high combos
+      if (this.comboCount >= 5 && sfx) sfx.combo();
+
       enemy.destroy();
-      this.score += enemy.textureKey === 'enemyC' ? 50 : enemy.textureKey === 'enemyB' ? 20 : 10;
 
       // Chance to drop powerup
-      if (Math.random() < 0.15) {
+      if (Math.random() < 0.2) {
         const pu = this.powerups.get(enemy.x, enemy.y);
         if (pu) {
           pu.setActive(true).setVisible(true);
           pu.setData('type', Math.random() < 0.5 ? 'shield' : 'speed');
-          // Slow fall for powerup
           pu.body.setVelocityY(100);
+          pu.body.setBounceX(-1);
           this.time.addEvent({ delay: 6000, callback: () => { if (pu.active) pu.destroy(); }});
         }
       }
     } else {
-      // Flash enemy white on hit
-      const origColor = enemy.tint;
-      enemy.setTint(0xffffff);
-      this.time.addEvent({ delay: 100, callback: () => { enemy.clearTint(); }});
+      // Hit sound for damaged enemies
+      if (sfx) sfx.hit();
     }
   }
 
@@ -434,16 +782,28 @@ class MainScene extends Phaser.Scene {
     if (this.shieldActive) return;
 
     enemy.destroy();
-    this.createExplosion(ship.x, ship.y);
+    this.createExplosion(ship.x, ship.y, false);
     this.lives--;
+    this.comboCount = 0; // Reset combo on hit
 
-    // Screen shake
-    this.cameras.main.shake(200, 0.01);
+    // Screen shake + red flash
+    this.cameras.main.shake(300, 0.02);
+    this.cameras.main.flash(150, 255, 0, 0, 0.3);
+
+    if (sfx) sfx.hit();
 
     if (this.lives <= 0) {
       this.gameOver = true;
       this.physics.pause();
-      showGameOver(this.score);
+
+      // Update high score
+      if (this.score > this.highScore) {
+        localStorage.setItem('starBlasterHigh', this.score.toString());
+        this.highScore = this.score;
+      }
+
+      showGameOver(this.score, this.wave);
+      if (sfx) sfx.gameOver();
     }
   }
 
@@ -451,24 +811,26 @@ class MainScene extends Phaser.Scene {
     pu.destroy();
     const type = pu.getData('type');
 
+    // Flash green on collect
+    this.cameras.main.flash(200, 0, 255, 0);
+
     if (type === 'shield') {
       this.shieldActive = true;
-      this.shieldTimer = 8000; // 8 seconds
+      this.shieldTimer = 8000;
       const shieldSprite = this.add.sprite(ship.x, ship.y, 'shield');
       shieldSprite.setOrigin(0.5);
       shieldSprite.setDepth(6);
       shieldSprite.setAlpha(0.7);
       ship.addChild(shieldSprite);
 
+      // Auto-remove after timer
       this.time.addEvent({ delay: 8000, callback: () => {
-        if (shieldSprite.parentContainer === ship) {
-          ship.removeChildAt(0);
-          shieldSprite.destroy();
-        }
+        const s = ship.getChildByIndex(0);
+        if (s && s.textureKey === 'shield') { s.destroy(); }
       }});
     } else if (type === 'speed') {
       this.speedBoost = true;
-      this.speedTimer = 6000; // 6 seconds
+      this.speedTimer = 6000;
 
       const text = this.add.text(ship.x, ship.y - 40, '+SPEED', {
         fontSize: '18px', fontFamily: 'Courier New', color: '#0f0'
@@ -477,23 +839,31 @@ class MainScene extends Phaser.Scene {
         callback: () => text.destroy() });
     }
 
-    // Flash green on collect
-    this.cameras.main.flash(150, 0, 255, 0);
+    if (sfx) sfx.powerup();
   }
 
-  createExplosion(x, y) {
-    for (let i = 0; i < 8; i++) {
+  createExplosion(x, y, big = false) {
+    const count = big ? 16 : 8;
+    for (let i = 0; i < count; i++) {
       const particle = this.add.sprite(x, y, 'explosion');
       particle.setDepth(3);
       particle.setAlpha(1);
-      const angle = (Math.PI * 2 / 8) * i;
-      const speed = Phaser.Math.FloatBetween(100, 300);
+      const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+      const speed = Phaser.Math.FloatBetween(big ? 150 : 80, big ? 400 : 250);
       particle.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
       this.tweens.add({
-        targets: particle, alpha: 0, scale: 2.5, duration: 400, ease: 'Linear',
+        targets: particle, alpha: 0, scale: big ? 3.5 : 2.5, duration: 400 + Math.random() * 200, ease: 'Linear',
         callback: () => particle.destroy()
       });
     }
+
+    // Central flash
+    const flash = this.add.sprite(x, y, 'flash');
+    flash.setDepth(4);
+    flash.setAlpha(1);
+    flash.setScale(big ? 3 : 2);
+    this.tweens.add({ targets: flash, alpha: 0, scale: big ? 5 : 3.5, duration: 200, ease: 'Linear',
+      callback: () => flash.destroy() });
   }
 }
 
@@ -521,13 +891,17 @@ function startGame() {
   game = new Phaser.Game(config);
 }
 
-function showGameOver(score) {
+function showGameOver(score, wave) {
   const overlay = document.getElementById('overlay');
   overlay.style.display = 'flex';
+  const highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
+  const isNew = score >= highScore && score > 0;
   overlay.innerHTML = `
     <h1>GAME OVER</h1>
     <div class="score-display">SCORE: ${score}</div>
-    <p>Wave reached: ${game ? game.scene.scenes[0].wave : '?'}</p>
+    ${isNew ? '<p style="color:#ff0;font-size:20px;text-shadow:0 0 15px #ff0;">★ NEW HIGH SCORE ★</p>' : ''}
+    <div class="high-score">HIGH SCORE: ${Math.max(score, highScore)}</div>
+    <p>Wave reached: ${wave}</p>
     <button id="restartBtn">PLAY AGAIN</button>
   `;
   document.getElementById('restartBtn').addEventListener('click', () => {
@@ -537,7 +911,11 @@ function showGameOver(score) {
   });
 }
 
-document.getElementById('startBtn').addEventListener('click', startGame);
+document.getElementById('startBtn').addEventListener('click', () => {
+  // Initialize audio context on user gesture
+  try { sfx = new SoundFX(); } catch(e) { sfx = null; }
+  startGame();
+});
 </script>
 </body>
 </html>
