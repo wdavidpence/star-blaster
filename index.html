@@ -553,40 +553,42 @@
     function createPlayer(scene) {
       const w = scene.scale.width;
       const h = scene.scale.height;
+      const px = w / 2;
+      const py = h - 120;
 
-      // Solvalou-style ship
+      // Main silver/grey body (Solvalou-inspired)
       const ship = scene.add.graphics();
-      ship.lineStyle(2, 0x00ff00, 1);
-      ship.fillStyle(0x111111, 1);
-      ship.beginPath();
-      ship.moveTo(w/2, h - 150);
-      ship.lineTo(w/2 - 20, h - 100);
-      ship.lineTo(w/2 + 20, h - 100);
-      ship.closePath();
-      ship.strokePath();
-      ship.fillPath();
+      ship.fillStyle(0xcccccc, 1);
+      ship.lineStyle(2, 0x888888, 1);
+      // Fuselage
+      ship.fillRect(px - 8, py - 25, 16, 45);
+      ship.strokeRect(px - 8, py - 25, 16, 45);
+      // Wings
+      ship.fillStyle(0xaaaaaa, 1);
+      ship.fillTriangle(px - 8, py - 5, px - 28, py + 15, px - 8, py + 15);
+      ship.fillTriangle(px + 8, py - 5, px + 28, py + 15, px + 8, py + 15);
+      ship.lineStyle(2, 0x666666, 1);
+      ship.strokeTriangle(px - 8, py - 5, px - 28, py + 15, px - 8, py + 15);
+      ship.strokeTriangle(px + 8, py - 5, px + 28, py + 15, px + 8, py + 15);
+      // Cockpit
+      ship.fillStyle(0x00ff88, 0.7);
+      ship.fillCircle(px, py - 15, 5);
 
-      // Engine glow
+      // Green engine glow
       const engine = scene.add.graphics();
-      engine.lineStyle(2, 0x00ffff, 1);
-      engine.fillStyle(0x00aaaa, 1);
-      engine.beginPath();
-      engine.moveTo(w/2 - 8, h - 105);
-      engine.lineTo(w/2, h - 85);
-      engine.lineTo(w/2 + 8, h - 105);
-      engine.closePath();
-      engine.strokePath();
-      engine.fillPath();
+      engine.fillStyle(0x00ff00, 0.9);
+      engine.fillRect(px - 5, py + 22, 10, 8);
+      engine.fillStyle(0x88ff88, 0.6);
+      engine.fillRect(px - 3, py + 28, 6, 6);
 
-      // Store references
-      ship.data = { type: 'player', health: 1 };
+      ship.data = { type: 'player', health: 1, engine: engine };
       engine.setData('parent', ship);
 
-      // Animate engine
+      // Engine pulse
       scene.tweens.add({
         targets: engine,
-        alpha: 0.5,
-        duration: 200,
+        alpha: 0.4,
+        duration: 120,
         yoyo: true,
         repeat: -1,
         ease: 'Sine.easeInOut'
@@ -659,48 +661,53 @@
     function spawnEnemy(scene) {
       const w = scene.scale.width;
       const h = scene.scale.height;
-      const type = Math.random() < 0.2 ? 'boss' : Math.random() < 0.5 ? 'fighter' : 'bomber';
+      const typeRoll = Math.random();
+      const type = typeRoll < 0.25 ? 'fighter' : typeRoll < 0.85 ? 'bomber' : 'boss';
+      const px = w / 2 + (Math.random() - 0.5) * (w * 0.7);
+      const py = -30;
 
       const enemy = scene.add.graphics();
       let data = { type: 'enemy', health: 1, speed: 2, shootChance: 0.001, points: 100 };
 
       if (type === 'fighter') {
-        enemy.lineStyle(2, 0xff0000, 1);
-        enemy.fillStyle(0x330000, 1);
-        enemy.beginPath();
-        enemy.moveTo(w/2 - 15 + Math.random() * (w - 30), -20);
-        enemy.lineTo(w/2 - 30 + Math.random() * (w - 30), 20);
-        enemy.lineTo(w/2 + 15 + Math.random() * (w - 30), -20);
-        enemy.closePath();
-        enemy.strokePath();
-        enemy.fillPath();
+        // Red wedge fighter
+        enemy.fillStyle(0xcc0000, 1);
+        enemy.lineStyle(2, 0xff3333, 1);
+        enemy.fillTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
+        enemy.strokeTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
         data.health = 1;
-        data.speed = 3;
-        data.shootChance = 0.003;
-        data.points = 50;
+        data.speed = 3.2;
+        data.shootChance = 0.0035;
+        data.points = 60;
       } else if (type === 'bomber') {
-        enemy.lineStyle(2, 0xffaa00, 1);
-        enemy.fillStyle(0x442200, 1);
-        enemy.fillRect(w/2 - 15 + Math.random() * (w - 30), -20, 30, 30);
+        // Orange bomber with turrets
+        enemy.fillStyle(0xdd8800, 1);
+        enemy.lineStyle(2, 0xffaa33, 1);
+        enemy.fillRect(px - 16, py - 10, 32, 22);
+        enemy.strokeRect(px - 16, py - 10, 32, 22);
+        // Turrets
+        enemy.fillStyle(0x662200, 1);
+        enemy.fillRect(px - 8, py - 4, 6, 8);
+        enemy.fillRect(px + 2, py - 4, 6, 8);
         data.health = 2;
-        data.speed = 1.5;
-        data.shootChance = 0.005;
-        data.points = 150;
+        data.speed = 1.6;
+        data.shootChance = 0.006;
+        data.points = 160;
       } else if (type === 'boss') {
-        enemy.lineStyle(3, 0xff00ff, 1);
-        enemy.fillStyle(0x330033, 1);
-        enemy.beginPath();
-        enemy.moveTo(w/2 - 40, -40);
-        enemy.lineTo(w/2 - 20, 0);
-        enemy.lineTo(w/2 + 20, 0);
-        enemy.lineTo(w/2 + 40, -40);
-        enemy.closePath();
-        enemy.strokePath();
-        enemy.fillPath();
-        data.health = 10;
-        data.speed = 0.5;
-        data.shootChance = 0.01;
-        data.points = 1000;
+        // Large menacing boss with glowing weak points
+        enemy.fillStyle(0x440000, 1);
+        enemy.lineStyle(4, 0xff2222, 1);
+        enemy.fillRect(px - 28, py - 18, 56, 38);
+        enemy.strokeRect(px - 28, py - 18, 56, 38);
+        // Weak point core
+        enemy.fillStyle(0xffff00, 0.9);
+        enemy.fillCircle(px, py, 10);
+        enemy.lineStyle(2, 0xffffff, 1);
+        enemy.strokeCircle(px, py, 10);
+        data.health = 12;
+        data.speed = 0.55;
+        data.shootChance = 0.012;
+        data.points = 1200;
         bossActive = true;
       }
 
