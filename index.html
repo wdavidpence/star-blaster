@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>STAR BLASTER - Xevious Style</title>
+<style>
+body { margin:0; padding:0; background:#000; overflow:hidden; font-family:monospace; }
+canvas { display:block; image-rendering:pixelated; }
+#ui { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; color:#0f0; font-size:14px; }
+.hud { position:absolute; padding:8px; background:rgba(0,0,0,0.6); border:1px solid #0f0; }
+#score { top:10px; left:10px; }
+#fuel { top:10px; right:10px; width:120px; }
+#distance { bottom:10px; left:50%; transform:translateX(-50%); }
+#title { position:absolute; top:40%; left:50%; transform:translate(-50%,-50%); text-align:center; pointer-events:auto; }
+#title h1 { font-size:42px; margin:0; text-shadow:0 0 10px #0f0; }
+button { background:#003300; color:#0f0; border:2px solid #0f0; padding:12px 30px; font-size:18px; cursor:pointer; margin-top:20px; }
+button:hover { background:#006600; }
+#gameover { display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; background:rgba(0,0,0,0.85); padding:30px; border:3px solid #0f0; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="ui">
+  <div id="score" class="hud">SCORE: 000000<br>HIGH: 000000<br>LIVES: 3</div>
+  <div id="fuel" class="hud">FUEL<br><div style="width:100%;height:8px;background:#003300;border:1px solid #0f0;"><div id="fuelbar" style="width:100%;height:100%;background:#0f0;transition:width .1s;"></div></div></div>
+  <div id="distance" class="hud">DISTANCE: 0000</div>
+  
+  <div id="title">
+    <h1>STAR BLASTER</h1>
+    <p style="color:#0a0;font-size:12px;">XEVIOUS INSPIRED • 1983 NAMCO STYLE</p>
+    <button onclick="startGame()">INSERT COIN</button>
+  </div>
+  
+  <div id="gameover">
+    <h2>GAME OVER</h2>
+    <p id="finalscore">SCORE: 000000</p>
+    <button onclick="restartGame()">TRY AGAIN</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+<script>
+const WIDTH = 360;
+const HEIGHT = 640;
+
+let game, player, terrain, enemies, bullets, bombs, particles, explosions;
+let score = 0, highScore = 0, lives = 3, fuel = 100, distance = 0, wave = 1, combo = 0;
+let lastShot = 0, lastBomb = 0, gameOver = false;
+let zapperHeld = false, blasterHeld = false;
+
+const config = {
+  type: Phaser.AUTO,
+  width: WIDTH,
+  height: HEIGHT,
+  parent: 'game',
+  physics: { default: 'arcade', arcade: { debug: false } },
+  scene: { preload, create, update }
+};
+
+function preload() {}
+
+function create() {
+  const scene = this;
+  
+  // Background layers
+  scene.sky = scene.add.graphics();
+  scene.sky.fillGradientStyle(0x001133, 0x001133, 0x112244, 0x112244, 1);
+  scene.sky.fillRect(0, 0, WIDTH, HEIGHT);
+  
+  // Terrain container
+  terrain = scene.add.group();
+  createTerrain(scene);
+  
+  // Player (Solvalou style)
+  player = scene.physics.add.sprite(WIDTH/2, HEIGHT-80, null);
+  player.setSize(28, 18);
+  drawSolvalou(player, scene);
+  
+  // Engine glow
+  player.engine = scene.add.graphics();
+  
+  // Crosshair
+  player.crosshair = scene.add.graphics();
+  player.reticle = scene.add.graphics();
+  
+  // Groups
+  enemies = scene.physics.add.group();
+  bullets = scene.physics.add.group();
+  bombs = scene.physics.add.group();
+  particles = scene.add.group();
+  explosions = scene.add.group();
+  
+  // Input
+  scene.input.on('pointerdown', (p) => {
+    if (gameOver) return;
+    if (p.y < HEIGHT * 0.6) zapperHeld = true;
+    else blasterHeld = true;
+  });
+  scene.input.on('pointerup', () => { zapperHeld = blasterHeld = false; });
+  scene.input.on('pointermove', (p) => {
+    if (!gameOver && player) player.x = Phaser.Math.Clamp(p.x, 30, WIDTH-30);
+  });
+  
+  // Collision
+  scene.physics.add.overlap(bullets, enemies, hitEnemy, null, scene);
+  scene.physics.add.overlap(bombs, enemies, hitEnemyBomb, null, scene);
+  scene.physics.add.overlap(player, enemies, playerHit, null, scene);
+  
+  // UI update loop
+  scene.time.addEvent({ delay: 200, loop: true, callback: updateHUD });
+  
+  // Start with title visible
+  document.getElementById('title').style.display = 'block';
+  document.getElementById('gameover').style.display = 'none';
+}
+
+function createTerrain(scene) {
+  for (let y = -HEIGHT; y < HEIGHT * 2; y += 48) {
+    const g = scene.add.graphics();
+    g.y = y;
+    drawTerrainTile(g, Math.floor(y/48));
+    terrain.add(g);
+  }
+}
+
+function drawTerrainTile(g, row) {
+  g.clear();
+  // Base ground
+  g.fillStyle(0x225511);
+  g.fillRect(0, 0, WIDTH, 48);
+  
+  // Grass texture
+  g.fillStyle(0x337722);
+  for (let i = 0; i < 12; i++) {
+    g.fillRect(Math.random()*WIDTH, Math.random()*48, 3, 1);
+  }
+  
+  // Road
+  g.fillStyle(0x554433);
+  g.fillRect(WIDTH/2 - 22, 0, 44, 48);
+  g.fillStyle(0x776655);
+  g.fillRect(WIDTH/2 - 18, 0, 36, 48);
+  
+  // Trees / structures
+  const seed = row * 17;
+  if ((seed % 5) === 0) {
+    g.fillStyle(0x114400);
+    g.fillRect(WIDTH/2 - 60 + (seed%30), 8, 8, 24); // tree
+    g.fillStyle(0x003300);
+    g.fillCircle(WIDTH/2 - 56 + (seed%30), 12, 10);
+  }
+  if ((seed % 7) === 1) {
+    g.fillStyle(0x334455);
+    g.fillRect(WIDTH/2 + 50, 12, 18, 18); // building
+  }
+}
+
+function drawSolvalou(spr, scene) {
+  const g = scene.add.graphics();
+  g.fillStyle(0xaaaaaa);
+  g.fillTriangle(0, 0, 28, 0, 14, -18); // body
+  g.fillStyle(0x666666);
+  g.fillRect(8, -4, 12, 4); // cockpit
+  g.fillStyle(0xffaa00);
+  g.fillCircle(14, 4, 3); // engine
+  spr.setTexture(g.generateTexture('solvalou', 30, 24));
+  g.destroy();
+}
+
+function update() {
+  if (gameOver || !player) return;
+  const scene = this;
+  const time = scene.time.now;
+  
+  // Scroll terrain
+  terrain.getChildren().forEach(t => {
+    t.y += 1.8;
+    if (t.y > HEIGHT) {
+      t.y = -HEIGHT;
+      drawTerrainTile(t, Math.floor(distance/10));
+    }
+  });
+  
+  distance += 0.8;
+  
+  // Fuel
+  fuel = Math.max(0, fuel - 0.015);
+  if (fuel <= 0) endGame(scene);
+  
+  // Player engine
+  player.engine.clear();
+  player.engine.fillStyle(0xffaa00);
+  player.engine.fillRect(player.x - 4, player.y + 9, 8, 6 + Math.sin(time/80)*2);
+  
+  // Crosshair / Reticle
+  updateReticle(player, scene);
+  
+  // Weapons
+  if (zapperHeld && time - lastShot > 90) {
+    fireZapper(scene, time);
+  }
+  if (blasterHeld && time - lastBomb > 280) {
+    fireBlaster(scene, time);
+  }
+  
+  // Spawn enemies
+  if (Math.random() < 0.035 + wave * 0.004) spawnEnemy(scene);
+  
+  // Update enemies
+  enemies.getChildren().forEach(e => {
+    if (e.y > HEIGHT + 30) e.destroy();
+    if (e.type === 'turret' && Math.random() < 0.02) shootAtPlayer(e, scene);
+    if (e.type === 'fighter') {
+      e.x += Math.sin(time/300 + e.seed) * 0.8;
+    }
+  });
+  
+  // Update bombs
+  bombs.getChildren().forEach(b => {
+    b.setVelocityY(b.body.velocity.y + 0.3);
+    if (b.y > HEIGHT) b.destroy();
+  });
+  
+  // Clean particles
+  particles.getChildren().forEach(p => {
+    p.alpha -= 0.04;
+    if (p.alpha <= 0) p.destroy();
+  });
+  
+  // Boss check
+  if (distance > wave * 420 && enemies.countActive() < 3) {
+    spawnBoss(scene);
+    wave++;
+  }
+  
+  updateHUD();
+}
+
+function updateReticle(p, scene) {
+  p.crosshair.clear();
+  p.reticle.clear();
+  
+  // Zapper crosshair
+  p.crosshair.lineStyle(1, 0x00ff00, 0.9);
+  p.crosshair.strokeCircle(p.x, p.y - 90, 6);
+  p.crosshair.strokeRect(p.x-10, p.y-92, 20, 4);
+  
+  // Blaster reticle (ground)
+  const groundY = p.y + 120;
+  p.reticle.lineStyle(2, 0xff0000, 0.7 + Math.sin(Date.now()/150)*0.3);
+  p.reticle.strokeCircle(p.x, groundY, 11);
+  p.reticle.strokeCircle(p.x, groundY, 17);
+}
+
+function fireZapper(scene, time) {
+  lastShot = time;
+  const b = bullets.create(player.x, player.y - 22, null);
+  b.setVelocityY(-380);
+  b.setSize(3, 10);
+  b.setTint(0x00ff66);
+  playSound('zapper');
+}
+
+function fireBlaster(scene, time) {
+  lastBomb = time;
+  const b = bombs.create(player.x, player.y + 10, null);
+  b.setVelocityY(-120);
+  b.setSize(7, 7);
+  b.setTint(0xffaa00);
+  b.type = 'bomb';
+  playSound('bomb');
+}
+
+function spawnEnemy(scene) {
+  const types = ['fighter', 'bomber', 'turret'];
+  const type = types[Math.floor(Math.random()*types.length)];
+  const x = 40 + Math.random() * (WIDTH-80);
+  const e = enemies.create(x, -30, null);
+  
+  e.type = type;
+  e.seed = Math.random()*10;
+  
+  if (type === 'fighter') {
+    drawFighter(e, scene);
+    e.setVelocityY(90 + wave*12);
+    e.setVelocityX(Math.sin(e.seed)*40);
+  } else if (type === 'bomber') {
+    drawBomber(e, scene);
+    e.setVelocityY(55);
+  } else if (type === 'turret') {
+    drawTurret(e, scene);
+    e.setVelocityY(35);
+    e.y = 120 + Math.random()*200;
+  }
+}
+
+function drawFighter(e, scene) {
+  const g = scene.add.graphics();
+  g.fillStyle(0xff3300);
+  g.fillTriangle(0,0, 22,0, 11,-16);
+  g.fillStyle(0x990000);
+  g.fillRect(6, -8, 10, 4);
+  e.setTexture(g.generateTexture('fighter', 24, 20));
+  g.destroy();
+}
+
+function drawBomber(e, scene) {
+  const g = scene.add.graphics();
+  g.fillStyle(0x4488ff);
+  g.fillRect(0,0,26,14);
+  g.fillStyle(0x2266aa);
+  g.fillRect(4,3,18,8);
+  e.setTexture(g.generateTexture('bomber', 28, 16));
+  g.destroy();
+}
+
+function drawTurret(e, scene) {
+  const g = scene.add.graphics();
+  g.fillStyle(0x664422);
+  g.fillRect(0,0,20,14);
+  g.fillStyle(0xff0000);
+  g.fillCircle(10,7,5);
+  e.setTexture(g.generateTexture('turret', 22, 16));
+  g.destroy();
+}
+
+function spawnBoss(scene) {
+  const b = enemies.create(WIDTH/2, -80, null);
+  b.type = 'boss';
+  b.hp = 18;
+  b.setVelocityY(25);
+  const g = scene.add.graphics();
+  g.fillStyle(0x222266);
+  g.fillRect(0,0,72,42);
+  g.fillStyle(0x4488ff);
+  g.fillRect(10,8,52,12);
+  g.fillStyle(0xffaa00);
+  g.fillCircle(20,24,6);
+  g.fillCircle(52,24,6);
+  b.setTexture(g.generateTexture('boss', 74, 44));
+  g.destroy();
+  playSound('boss');
+}
+
+function hitEnemy(bullet, enemy) {
+  bullet.destroy();
+  if (enemy.type === 'boss') {
+    enemy.hp--;
+    if (enemy.hp <= 0) killEnemy(enemy);
+  } else {
+    killEnemy(enemy);
+  }
+}
+
+function hitEnemyBomb(bomb, enemy) {
+  bomb.destroy();
+  if (enemy.type === 'turret' || enemy.type === 'boss') {
+    killEnemy(enemy);
+  }
+}
+
+function killEnemy(e) {
+  createExplosion(e.x, e.y);
+  score += (e.type === 'boss' ? 1500 : 120) * (combo + 1);
+  combo++;
+  e.destroy();
+  showScorePopup(e.x, e.y);
+  playSound('explode');
+}
+
+function createExplosion(x, y) {
+  for (let i = 0; i < 12; i++) {
+    const p = particles.create(x, y, null);
+    p.setVelocity(Math.random()*160-80, Math.random()*160-80);
+    p.setSize(3,3);
+    p.setTint(0xffaa00);
+    p.alpha = 0.9;
+  }
+}
+
+function showScorePopup(x, y) {
+  const txt = this.add.text(x, y-20, '+120', { fontSize:'12px', fill:'#ff0' });
+  this.tweens.add({ targets:txt, y:y-45, alpha:0, duration:600, onComplete: () => txt.destroy() });
+}
+
+function shootAtPlayer(e, scene) {
+  const b = bullets.create(e.x, e.y + 10, null);
+  const dx = player.x - e.x;
+  const dy = player.y - e.y;
+  const len = Math.hypot(dx, dy) || 1;
+  b.setVelocity(dx/len * 140, dy/len * 140);
+  b.setSize(3,3);
+  b.setTint(0xff4444);
+}
+
+function playerHit(p, e) {
+  createExplosion(p.x, p.y);
+  lives--;
+  fuel = Math.max(20, fuel - 25);
+  e.destroy();
+  playSound('hit');
+  if (lives <= 0) endGame(this);
+  else {
+    p.setAlpha(0.3);
+    this.time.delayedCall(600, () => p.setAlpha(1));
+  }
+}
+
+function updateHUD() {
+  document.getElementById('score').innerHTML = 
+    `SCORE: ${score.toString().padStart(6,'0')}<br>HIGH: ${highScore.toString().padStart(6,'0')}<br>LIVES: ${lives}`;
+  document.getElementById('fuelbar').style.width = fuel + '%';
+  document.getElementById('distance').innerHTML = `DISTANCE: ${Math.floor(distance)}`;
+}
+
+function endGame(scene) {
+  gameOver = true;
+  highScore = Math.max(highScore, score);
+  document.getElementById('gameover').style.display = 'block';
+  document.getElementById('finalscore').innerText = `SCORE: ${score}`;
+  enemies.clear(true, true);
+  bullets.clear(true, true);
+  bombs.clear(true, true);
+}
+
+function startGame() {
+  document.getElementById('title').style.display = 'none';
+  resetGame();
+}
+
+function restartGame() {
+  document.getElementById('gameover').style.display = 'none';
+  resetGame();
+}
+
+function resetGame() {
+  score = 0; lives = 3; fuel = 100; distance = 0; wave = 1; combo = 0; gameOver = false;
+  if (enemies) enemies.clear(true, true);
+  if (bullets) bullets.clear(true, true);
+  if (bombs) bombs.clear(true, true);
+  if (player) {
+    player.x = WIDTH/2;
+    player.y = HEIGHT-80;
+  }
+}
+
+function playSound(type) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    
+    if (type === 'zapper') { o.type='sawtooth'; o.frequency.value=880; g.gain.value=0.2; setTimeout(()=>g.gain.value=0,80); }
+    else if (type === 'bomb') { o.type='sine'; o.frequency.value=180; g.gain.value=0.3; setTimeout(()=>g.gain.value=0,220); }
+    else if (type === 'explode') { o.type='square'; o.frequency.value=120; g.gain.value=0.4; setTimeout(()=>g.gain.value=0,300); }
+    else if (type === 'hit') { o.type='sawtooth'; o.frequency.value=220; g.gain.value=0.25; setTimeout(()=>g.gain.value=0,180); }
+    else if (type === 'boss') { o.type='sawtooth'; o.frequency.value=55; g.gain.value=0.35; setTimeout(()=>g.gain.value=0,900); }
+    
+    o.start();
+    setTimeout(() => { o.stop(); ctx.close(); }, 900);
+  } catch(e){}
+}
+
+// Boot
+window.onload = () => {
+  game = new Phaser.Game(config);
+};
+</script>
+</body>
+</html>
