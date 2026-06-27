@@ -1,472 +1,1062 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>STAR BLASTER - Xevious Style</title>
-<style>
-body { margin:0; padding:0; background:#000; overflow:hidden; font-family:monospace; }
-canvas { display:block; image-rendering:pixelated; }
-#ui { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; color:#0f0; font-size:14px; }
-.hud { position:absolute; padding:8px; background:rgba(0,0,0,0.6); border:1px solid #0f0; }
-#score { top:10px; left:10px; }
-#fuel { top:10px; right:10px; width:120px; }
-#distance { bottom:10px; left:50%; transform:translateX(-50%); }
-#title { position:absolute; top:40%; left:50%; transform:translate(-50%,-50%); text-align:center; pointer-events:auto; }
-#title h1 { font-size:42px; margin:0; text-shadow:0 0 10px #0f0; }
-button { background:#003300; color:#0f0; border:2px solid #0f0; padding:12px 30px; font-size:18px; cursor:pointer; margin-top:20px; }
-button:hover { background:#006600; }
-#gameover { display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; background:rgba(0,0,0,0.85); padding:30px; border:3px solid #0f0; }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Star Blaster</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+  <style>
+    body { 
+      margin: 0; 
+      padding: 0; 
+      background: #000; 
+      overflow: hidden; 
+      touch-action: none;
+    }
+    #game-container {
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
 </head>
 <body>
-<div id="game"></div>
-<div id="ui">
-  <div id="score" class="hud">SCORE: 000000<br>HIGH: 000000<br>LIVES: 3</div>
-  <div id="fuel" class="hud">FUEL<br><div style="width:100%;height:8px;background:#003300;border:1px solid #0f0;"><div id="fuelbar" style="width:100%;height:100%;background:#0f0;transition:width .1s;"></div></div></div>
-  <div id="distance" class="hud">DISTANCE: 0000</div>
-  
-  <div id="title">
-    <h1>STAR BLASTER</h1>
-    <p style="color:#0a0;font-size:12px;">XEVIOUS INSPIRED • 1983 NAMCO STYLE</p>
-    <button onclick="startGame()">INSERT COIN</button>
-  </div>
-  
-  <div id="gameover">
-    <h2>GAME OVER</h2>
-    <p id="finalscore">SCORE: 000000</p>
-    <button onclick="restartGame()">TRY AGAIN</button>
-  </div>
-</div>
+  <div id="game-container"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
-<script>
-const WIDTH = 360;
-const HEIGHT = 640;
+  <script>
+    // ================== AUDIO SYSTEM ==================
+    const AudioSystem = {
+      ctx: null,
+      masterGain: null,
+      isPlaying: false,
 
-let game, player, terrain, enemies, bullets, bombs, particles, explosions;
-let score = 0, highScore = 0, lives = 3, fuel = 100, distance = 0, wave = 1, combo = 0;
-let lastShot = 0, lastBomb = 0, gameOver = false;
-let zapperHeld = false, blasterHeld = false;
+      init() {
+        if (this.ctx) return;
+        try {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.value = 0.7;
+          this.masterGain.connect(this.ctx.destination);
+        } catch (e) {
+          console.error('Audio init failed:', e);
+        }
+      },
 
-const config = {
-  type: Phaser.AUTO,
-  width: WIDTH,
-  height: HEIGHT,
-  parent: 'game',
-  physics: { default: 'arcade', arcade: { debug: false } },
-  scene: { preload, create, update }
-};
+      resume() {
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      },
 
-function preload() {}
+      playShoot() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
 
-function create() {
-  const scene = this;
-  
-  // Background layers
-  scene.sky = scene.add.graphics();
-  scene.sky.fillGradientStyle(0x001133, 0x001133, 0x112244, 0x112244, 1);
-  scene.sky.fillRect(0, 0, WIDTH, HEIGHT);
-  
-  // Terrain container
-  terrain = scene.add.group();
-  createTerrain(scene);
-  
-  // Player (Solvalou style)
-  player = scene.physics.add.sprite(WIDTH/2, HEIGHT-80, null);
-  player.setSize(28, 18);
-  drawSolvalou(player, scene);
-  
-  // Engine glow
-  player.engine = scene.add.graphics();
-  
-  // Crosshair
-  player.crosshair = scene.add.graphics();
-  player.reticle = scene.add.graphics();
-  
-  // Groups
-  enemies = scene.physics.add.group();
-  bullets = scene.physics.add.group();
-  bombs = scene.physics.add.group();
-  particles = scene.add.group();
-  explosions = scene.add.group();
-  
-  // Input
-  scene.input.on('pointerdown', (p) => {
-    if (gameOver) return;
-    if (p.y < HEIGHT * 0.6) zapperHeld = true;
-    else blasterHeld = true;
-  });
-  scene.input.on('pointerup', () => { zapperHeld = blasterHeld = false; });
-  scene.input.on('pointermove', (p) => {
-    if (!gameOver && player) player.x = Phaser.Math.Clamp(p.x, 30, WIDTH-30);
-  });
-  
-  // Collision
-  scene.physics.add.overlap(bullets, enemies, hitEnemy, null, scene);
-  scene.physics.add.overlap(bombs, enemies, hitEnemyBomb, null, scene);
-  scene.physics.add.overlap(player, enemies, playerHit, null, scene);
-  
-  // UI update loop
-  scene.time.addEvent({ delay: 200, loop: true, callback: updateHUD });
-  
-  // Start with title visible
-  document.getElementById('title').style.display = 'block';
-  document.getElementById('gameover').style.display = 'none';
-}
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(880, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, this.ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
 
-function createTerrain(scene) {
-  for (let y = -HEIGHT; y < HEIGHT * 2; y += 48) {
-    const g = scene.add.graphics();
-    g.y = y;
-    drawTerrainTile(g, Math.floor(y/48));
-    terrain.add(g);
-  }
-}
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.1);
+      },
 
-function drawTerrainTile(g, row) {
-  g.clear();
-  // Base ground
-  g.fillStyle(0x225511);
-  g.fillRect(0, 0, WIDTH, 48);
-  
-  // Grass texture
-  g.fillStyle(0x337722);
-  for (let i = 0; i < 12; i++) {
-    g.fillRect(Math.random()*WIDTH, Math.random()*48, 3, 1);
-  }
-  
-  // Road
-  g.fillStyle(0x554433);
-  g.fillRect(WIDTH/2 - 22, 0, 44, 48);
-  g.fillStyle(0x776655);
-  g.fillRect(WIDTH/2 - 18, 0, 36, 48);
-  
-  // Trees / structures
-  const seed = row * 17;
-  if ((seed % 5) === 0) {
-    g.fillStyle(0x114400);
-    g.fillRect(WIDTH/2 - 60 + (seed%30), 8, 8, 24); // tree
-    g.fillStyle(0x003300);
-    g.fillCircle(WIDTH/2 - 56 + (seed%30), 12, 10);
-  }
-  if ((seed % 7) === 1) {
-    g.fillStyle(0x334455);
-    g.fillRect(WIDTH/2 + 50, 12, 18, 18); // building
-  }
-}
+      playBomb() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
 
-function drawSolvalou(spr, scene) {
-  const g = scene.add.graphics();
-  g.fillStyle(0xaaaaaa);
-  g.fillTriangle(0, 0, 28, 0, 14, -18); // body
-  g.fillStyle(0x666666);
-  g.fillRect(8, -4, 12, 4); // cockpit
-  g.fillStyle(0xffaa00);
-  g.fillCircle(14, 4, 3); // engine
-  spr.setTexture(g.generateTexture('solvalou', 30, 24));
-  g.destroy();
-}
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(80, this.ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
 
-function update() {
-  if (gameOver || !player) return;
-  const scene = this;
-  const time = scene.time.now;
-  
-  // Scroll terrain
-  terrain.getChildren().forEach(t => {
-    t.y += 1.8;
-    if (t.y > HEIGHT) {
-      t.y = -HEIGHT;
-      drawTerrainTile(t, Math.floor(distance/10));
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.2);
+      },
+
+      playExplosion() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(120, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.3);
+      },
+
+      playHit() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.15);
+      },
+
+      playBossAlert() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(55, this.ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(65, this.ctx.currentTime + 1);
+        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 1);
+
+        osc.start();
+        osc.stop(this.ctx.currentTime + 1);
+      },
+
+      playFuelPickup() {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(880, this.ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.2);
+
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.2);
+      }
+    };
+
+    // ================== GAME CONFIG ==================
+    const config = {
+      type: Phaser.AUTO,
+      parent: 'game-container',
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: '#000',
+      scene: {
+        preload: preload,
+        create: create,
+        update: update
+      }
+    };
+
+    // ================== GAME STATE ==================
+    let game;
+    let player;
+    let bullets = [];
+    let enemies = [];
+    let enemyBullets = [];
+    let fuelPickups = [];
+    let terrain = [];
+    let score = 0;
+    let fuel = 100;
+    let lives = 3;
+    let gameActive = false;
+    let bossActive = false;
+    let bossHealth = 0;
+    let comboCount = 0;
+    let comboTimer = 0;
+    let difficulty = 1;
+    let lastShootTime = 0;
+    let lastBombTime = 0;
+    let lastBossSpawn = 0;
+    let lastFuelSpawn = 0;
+    let lastEnemySpawn = 0;
+    let shakeTime = 0;
+    let flashTime = 0;
+    let distance = 0;
+    let highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
+    let touchLeft = false;
+    let touchRight = false;
+    let touchShoot = false;
+    let touchBomb = false;
+
+    // ================== PHASER SCENE ==================
+    function preload() {
+      // Load no external assets - we'll generate everything procedurally
     }
-  });
-  
-  distance += 0.8;
-  
-  // Fuel
-  fuel = Math.max(0, fuel - 0.015);
-  if (fuel <= 0) endGame(scene);
-  
-  // Player engine
-  player.engine.clear();
-  player.engine.fillStyle(0xffaa00);
-  player.engine.fillRect(player.x - 4, player.y + 9, 8, 6 + Math.sin(time/80)*2);
-  
-  // Crosshair / Reticle
-  updateReticle(player, scene);
-  
-  // Weapons
-  if (zapperHeld && time - lastShot > 90) {
-    fireZapper(scene, time);
-  }
-  if (blasterHeld && time - lastBomb > 280) {
-    fireBlaster(scene, time);
-  }
-  
-  // Spawn enemies
-  if (Math.random() < 0.035 + wave * 0.004) spawnEnemy(scene);
-  
-  // Update enemies
-  enemies.getChildren().forEach(e => {
-    if (e.y > HEIGHT + 30) e.destroy();
-    if (e.type === 'turret' && Math.random() < 0.02) shootAtPlayer(e, scene);
-    if (e.type === 'fighter') {
-      e.x += Math.sin(time/300 + e.seed) * 0.8;
+
+    function create() {
+      // Initialize audio on first interaction
+      this.input.on('pointerdown', () => {
+        AudioSystem.init();
+        AudioSystem.resume();
+      });
+
+      // Show title screen
+      showTitleScreen(this);
+
+      // Add touch controls
+      addTouchControls(this);
+
+      // Add HUD elements
+      addHUD(this);
+
+      // Set game state to not active
+      gameActive = false;
     }
-  });
-  
-  // Update bombs
-  bombs.getChildren().forEach(b => {
-    b.setVelocityY(b.body.velocity.y + 0.3);
-    if (b.y > HEIGHT) b.destroy();
-  });
-  
-  // Clean particles
-  particles.getChildren().forEach(p => {
-    p.alpha -= 0.04;
-    if (p.alpha <= 0) p.destroy();
-  });
-  
-  // Boss check
-  if (distance > wave * 420 && enemies.countActive() < 3) {
-    spawnBoss(scene);
-    wave++;
-  }
-  
-  updateHUD();
-}
 
-function updateReticle(p, scene) {
-  p.crosshair.clear();
-  p.reticle.clear();
-  
-  // Zapper crosshair
-  p.crosshair.lineStyle(1, 0x00ff00, 0.9);
-  p.crosshair.strokeCircle(p.x, p.y - 90, 6);
-  p.crosshair.strokeRect(p.x-10, p.y-92, 20, 4);
-  
-  // Blaster reticle (ground)
-  const groundY = p.y + 120;
-  p.reticle.lineStyle(2, 0xff0000, 0.7 + Math.sin(Date.now()/150)*0.3);
-  p.reticle.strokeCircle(p.x, groundY, 11);
-  p.reticle.strokeCircle(p.x, groundY, 17);
-}
+    function update(time, delta) {
+      if (!gameActive) return;
 
-function fireZapper(scene, time) {
-  lastShot = time;
-  const b = bullets.create(player.x, player.y - 22, null);
-  b.setVelocityY(-380);
-  b.setSize(3, 10);
-  b.setTint(0x00ff66);
-  playSound('zapper');
-}
+      // Update difficulty
+      difficulty = 1 + Math.floor(time / 30000) * 0.1;
 
-function fireBlaster(scene, time) {
-  lastBomb = time;
-  const b = bombs.create(player.x, player.y + 10, null);
-  b.setVelocityY(-120);
-  b.setSize(7, 7);
-  b.setTint(0xffaa00);
-  b.type = 'bomb';
-  playSound('bomb');
-}
+      // Spawn enemies
+      if (time - lastEnemySpawn > 2000 / difficulty) {
+        spawnEnemy(this);
+        lastEnemySpawn = time;
+      }
 
-function spawnEnemy(scene) {
-  const types = ['fighter', 'bomber', 'turret'];
-  const type = types[Math.floor(Math.random()*types.length)];
-  const x = 40 + Math.random() * (WIDTH-80);
-  const e = enemies.create(x, -30, null);
-  
-  e.type = type;
-  e.seed = Math.random()*10;
-  
-  if (type === 'fighter') {
-    drawFighter(e, scene);
-    e.setVelocityY(90 + wave*12);
-    e.setVelocityX(Math.sin(e.seed)*40);
-  } else if (type === 'bomber') {
-    drawBomber(e, scene);
-    e.setVelocityY(55);
-  } else if (type === 'turret') {
-    drawTurret(e, scene);
-    e.setVelocityY(35);
-    e.y = 120 + Math.random()*200;
-  }
-}
+      // Spawn boss
+      if (time - lastBossSpawn > 45000) {
+        spawnBoss(this);
+        lastBossSpawn = time;
+      }
 
-function drawFighter(e, scene) {
-  const g = scene.add.graphics();
-  g.fillStyle(0xff3300);
-  g.fillTriangle(0,0, 22,0, 11,-16);
-  g.fillStyle(0x990000);
-  g.fillRect(6, -8, 10, 4);
-  e.setTexture(g.generateTexture('fighter', 24, 20));
-  g.destroy();
-}
+      // Spawn fuel
+      if (time - lastFuelSpawn > 10000) {
+        spawnFuel(this);
+        lastFuelSpawn = time;
+      }
 
-function drawBomber(e, scene) {
-  const g = scene.add.graphics();
-  g.fillStyle(0x4488ff);
-  g.fillRect(0,0,26,14);
-  g.fillStyle(0x2266aa);
-  g.fillRect(4,3,18,8);
-  e.setTexture(g.generateTexture('bomber', 28, 16));
-  g.destroy();
-}
+      // Update player
+      updatePlayer(this, time, delta);
 
-function drawTurret(e, scene) {
-  const g = scene.add.graphics();
-  g.fillStyle(0x664422);
-  g.fillRect(0,0,20,14);
-  g.fillStyle(0xff0000);
-  g.fillCircle(10,7,5);
-  e.setTexture(g.generateTexture('turret', 22, 16));
-  g.destroy();
-}
+      // Update bullets
+      updateBullets(this, delta);
 
-function spawnBoss(scene) {
-  const b = enemies.create(WIDTH/2, -80, null);
-  b.type = 'boss';
-  b.hp = 18;
-  b.setVelocityY(25);
-  const g = scene.add.graphics();
-  g.fillStyle(0x222266);
-  g.fillRect(0,0,72,42);
-  g.fillStyle(0x4488ff);
-  g.fillRect(10,8,52,12);
-  g.fillStyle(0xffaa00);
-  g.fillCircle(20,24,6);
-  g.fillCircle(52,24,6);
-  b.setTexture(g.generateTexture('boss', 74, 44));
-  g.destroy();
-  playSound('boss');
-}
+      // Update enemies
+      updateEnemies(this, delta);
 
-function hitEnemy(bullet, enemy) {
-  bullet.destroy();
-  if (enemy.type === 'boss') {
-    enemy.hp--;
-    if (enemy.hp <= 0) killEnemy(enemy);
-  } else {
-    killEnemy(enemy);
-  }
-}
+      // Update enemy bullets
+      updateEnemyBullets(this, delta);
 
-function hitEnemyBomb(bomb, enemy) {
-  bomb.destroy();
-  if (enemy.type === 'turret' || enemy.type === 'boss') {
-    killEnemy(enemy);
-  }
-}
+      // Update fuel pickups
+      updateFuelPickups(this, delta);
 
-function killEnemy(e) {
-  createExplosion(e.x, e.y);
-  score += (e.type === 'boss' ? 1500 : 120) * (combo + 1);
-  combo++;
-  e.destroy();
-  showScorePopup(e.x, e.y);
-  playSound('explode');
-}
+      // Update terrain
+      updateTerrain(this, delta);
 
-function createExplosion(x, y) {
-  for (let i = 0; i < 12; i++) {
-    const p = particles.create(x, y, null);
-    p.setVelocity(Math.random()*160-80, Math.random()*160-80);
-    p.setSize(3,3);
-    p.setTint(0xffaa00);
-    p.alpha = 0.9;
-  }
-}
+      // Check collisions
+      checkCollisions(this);
 
-function showScorePopup(x, y) {
-  const txt = this.add.text(x, y-20, '+120', { fontSize:'12px', fill:'#ff0' });
-  this.tweens.add({ targets:txt, y:y-45, alpha:0, duration:600, onComplete: () => txt.destroy() });
-}
+      // Update combo
+      if (comboTimer > 0) {
+        comboTimer -= delta;
+        if (comboTimer <= 0) comboCount = 0;
+      }
 
-function shootAtPlayer(e, scene) {
-  const b = bullets.create(e.x, e.y + 10, null);
-  const dx = player.x - e.x;
-  const dy = player.y - e.y;
-  const len = Math.hypot(dx, dy) || 1;
-  b.setVelocity(dx/len * 140, dy/len * 140);
-  b.setSize(3,3);
-  b.setTint(0xff4444);
-}
+      // Update fuel
+      if (time - (window.lastFuelCheck || 0) > 1000) {
+        fuel = Math.max(0, fuel - 1);
+        window.lastFuelCheck = time;
+        if (fuel <= 0) {
+          loseLife(this);
+        }
+      }
 
-function playerHit(p, e) {
-  createExplosion(p.x, p.y);
-  lives--;
-  fuel = Math.max(20, fuel - 25);
-  e.destroy();
-  playSound('hit');
-  if (lives <= 0) endGame(this);
-  else {
-    p.setAlpha(0.3);
-    this.time.delayedCall(600, () => p.setAlpha(1));
-  }
-}
+      // Update distance
+      distance += delta / 1000;
 
-function updateHUD() {
-  document.getElementById('score').innerHTML = 
-    `SCORE: ${score.toString().padStart(6,'0')}<br>HIGH: ${highScore.toString().padStart(6,'0')}<br>LIVES: ${lives}`;
-  document.getElementById('fuelbar').style.width = fuel + '%';
-  document.getElementById('distance').innerHTML = `DISTANCE: ${Math.floor(distance)}`;
-}
+      // Update screen effects
+      if (shakeTime > 0) shakeTime -= delta;
+      if (flashTime > 0) flashTime -= delta;
 
-function endGame(scene) {
-  gameOver = true;
-  highScore = Math.max(highScore, score);
-  document.getElementById('gameover').style.display = 'block';
-  document.getElementById('finalscore').innerText = `SCORE: ${score}`;
-  enemies.clear(true, true);
-  bullets.clear(true, true);
-  bombs.clear(true, true);
-}
+      // Update HUD
+      updateHUD(this);
+    }
 
-function startGame() {
-  document.getElementById('title').style.display = 'none';
-  resetGame();
-}
+    // ================== TITLE SCREEN ==================
+    function showTitleScreen(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
 
-function restartGame() {
-  document.getElementById('gameover').style.display = 'none';
-  resetGame();
-}
+      // Background
+      const bg = scene.add.graphics();
+      bg.fillStyle(0x000033, 1);
+      bg.fillRect(0, 0, w, h);
 
-function resetGame() {
-  score = 0; lives = 3; fuel = 100; distance = 0; wave = 1; combo = 0; gameOver = false;
-  if (enemies) enemies.clear(true, true);
-  if (bullets) bullets.clear(true, true);
-  if (bombs) bombs.clear(true, true);
-  if (player) {
-    player.x = WIDTH/2;
-    player.y = HEIGHT-80;
-  }
-}
+      // Add stars
+      for (let i = 0; i < 100; i++) {
+        const x = Math.random() * w;
+        const y = Math.random() * h;
+        const size = Math.random() * 2 + 1;
+        const star = scene.add.circle(x, y, size, 0xffffff);
+        star.setAlpha(0.5 + Math.random() * 0.5);
+      }
 
-function playSound(type) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.connect(g); g.connect(ctx.destination);
-    
-    if (type === 'zapper') { o.type='sawtooth'; o.frequency.value=880; g.gain.value=0.2; setTimeout(()=>g.gain.value=0,80); }
-    else if (type === 'bomb') { o.type='sine'; o.frequency.value=180; g.gain.value=0.3; setTimeout(()=>g.gain.value=0,220); }
-    else if (type === 'explode') { o.type='square'; o.frequency.value=120; g.gain.value=0.4; setTimeout(()=>g.gain.value=0,300); }
-    else if (type === 'hit') { o.type='sawtooth'; o.frequency.value=220; g.gain.value=0.25; setTimeout(()=>g.gain.value=0,180); }
-    else if (type === 'boss') { o.type='sawtooth'; o.frequency.value=55; g.gain.value=0.35; setTimeout(()=>g.gain.value=0,900); }
-    
-    o.start();
-    setTimeout(() => { o.stop(); ctx.close(); }, 900);
-  } catch(e){}
-}
+      // Title
+      const title = scene.add.text(w/2, h/2 - 100, 'STAR BLASTER', {
+        fontSize: '64px',
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+        color: '#00ff00',
+        stroke: '#000000',
+        strokeThickness: 6,
+        align: 'center'
+      });
+      title.setOrigin(0.5);
+      title.setDepth(100);
 
-// Boot
-window.onload = () => {
-  game = new Phaser.Game(config);
-};
-</script>
+      // Subtitle
+      const sub = scene.add.text(w/2, h/2 - 30, 'Xevious-Style Arcade Shooter', {
+        fontSize: '20px',
+        fontFamily: 'Arial',
+        color: '#00ffff',
+        align: 'center'
+      });
+      sub.setOrigin(0.5);
+      sub.setDepth(100);
+
+      // Instructions
+      const instr = scene.add.text(w/2, h/2 + 60, 
+        'LEFT/RIGHT: Move\n' + 
+        'FIRE: Shoot (hold)\n' + 
+        'BOMB: Drop bomb (tap)\n\n' + 
+        'Collect FUEL to survive!', {
+        fontSize: '16px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        align: 'center'
+      });
+      instr.setOrigin(0.5);
+      instr.setDepth(100);
+
+      // High score
+      const highText = scene.add.text(w/2, h/2 + 140, `HIGH SCORE: ${highScore}`, {
+        fontSize: '18px',
+        fontFamily: 'Arial',
+        color: '#ffff00'
+      });
+      highText.setOrigin(0.5);
+      highText.setDepth(100);
+
+      // Start button
+      const startBtn = scene.add.text(w/2, h/2 + 200, 'TAP TO START', {
+        fontSize: '24px',
+        fontFamily: 'Arial',
+        color: '#00ff00',
+        stroke: '#000000',
+        strokeThickness: 4
+      });
+      startBtn.setOrigin(0.5);
+      startBtn.setDepth(100);
+
+      startBtn.setInteractive({ useHandCursor: true });
+      startBtn.on('pointerdown', () => {
+        startGame(scene);
+      });
+
+      // Animate title
+      scene.tweens.add({
+        targets: title,
+        y: title.y + 5,
+        duration: 1000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    }
+
+    // ================== TOUCH CONTROLS ==================
+    function addTouchControls(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Left zone
+      const leftZone = scene.add.rectangle(0, h/2, w/2, h, 0x000000, 0);
+      leftZone.setDepth(50);
+      leftZone.setInteractive({ useHandCursor: true });
+      leftZone.on('pointerdown', () => { touchLeft = true; });
+      leftZone.on('pointerup', () => { touchLeft = false; });
+
+      // Right zone
+      const rightZone = scene.add.rectangle(w/2, h/2, w/2, h, 0x000000, 0);
+      rightZone.setDepth(50);
+      rightZone.setInteractive({ useHandCursor: true });
+      rightZone.on('pointerdown', () => { touchRight = true; });
+      rightZone.on('pointerup', () => { touchRight = false; });
+
+      // Fire zone (top center)
+      const fireZone = scene.add.rectangle(w/2, h/3, w/2, h/3, 0x000000, 0);
+      fireZone.setDepth(50);
+      fireZone.setInteractive({ useHandCursor: true });
+      fireZone.on('pointerdown', () => { touchShoot = true; });
+      fireZone.on('pointerup', () => { touchShoot = false; });
+
+      // Bomb zone (bottom center)
+      const bombZone = scene.add.rectangle(w/2, h*0.75, w/2, h/3, 0x000000, 0);
+      bombZone.setDepth(50);
+      bombZone.setInteractive({ useHandCursor: true });
+      bombZone.on('pointerdown', () => { touchBomb = true; });
+      bombZone.on('pointerup', () => { touchBomb = false; });
+    }
+
+    // ================== HUD ==================
+    function addHUD(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Score
+      scene.scoreText = scene.add.text(10, 10, `SCORE: 0\nHIGH: ${highScore}`, {
+        fontSize: '14px',
+        fontFamily: 'Arial',
+        color: '#00ff00',
+        stroke: '#000000',
+        strokeThickness: 3,
+        align: 'left'
+      });
+      scene.scoreText.setDepth(60);
+
+      // Fuel bar
+      scene.fuelBar = scene.add.graphics();
+      scene.fuelBar.setDepth(60);
+
+      // Fuel label
+      scene.fuelText = scene.add.text(w - 130, 10, 'FUEL', {
+        fontSize: '12px',
+        fontFamily: 'Arial',
+        color: '#00ffff',
+        stroke: '#000000',
+        strokeThickness: 2
+      });
+      scene.fuelText.setDepth(60);
+
+      // Fuel bar background
+      scene.fuelBg = scene.add.graphics();
+      scene.fuelBg.lineStyle(1, 0x000000, 1);
+      scene.fuelBg.strokeRect(w - 120, 25, 100, 15);
+      scene.fuelBg.setDepth(60);
+
+      // Distance
+      scene.distanceText = scene.add.text(w/2, h - 20, `DIST: 0000`, {
+        fontSize: '12px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 2,
+        align: 'center'
+      });
+      scene.distanceText.setOrigin(0.5);
+      scene.distanceText.setDepth(60);
+
+      // Lives
+      scene.livesText = scene.add.text(10, h - 20, `LIVES: ${lives}`, {
+        fontSize: '14px',
+        fontFamily: 'Arial',
+        color: '#ff0000',
+        stroke: '#000000',
+        strokeThickness: 3,
+        align: 'left'
+      });
+      scene.livesText.setDepth(60);
+
+      // Combo display
+      scene.comboText = scene.add.text(w/2, h/3, '', {
+        fontSize: '24px',
+        fontFamily: 'Arial',
+        color: '#ffff00',
+        stroke: '#000000',
+        strokeThickness: 4,
+        align: 'center'
+      });
+      scene.comboText.setOrigin(0.5);
+      scene.comboText.setDepth(60);
+      scene.comboText.setAlpha(0);
+    }
+
+    function updateHUD(scene) {
+      // Score
+      scene.scoreText.setText(`SCORE: ${score}\nHIGH: ${highScore}`);
+
+      // Fuel bar
+      scene.fuelBar.clear();
+      const fuelPercent = fuel / 100;
+      const fuelColor = fuel > 50 ? 0x00ff00 : fuel > 20 ? 0xffff00 : 0xff0000;
+      scene.fuelBar.fillStyle(fuelColor, 1);
+      scene.fuelBar.fillRect(scene.scale.width - 119, 26, 98 * fuelPercent, 13);
+
+      // Distance
+      scene.distanceText.setText(`DIST: ${Math.floor(distance).toString().padStart(4, '0')}`);
+
+      // Lives
+      scene.livesText.setText(`LIVES: ${lives}`);
+
+      // Combo
+      if (comboCount >= 2) {
+        scene.comboText.setText(`COMBO x${comboCount}`);
+        scene.comboText.setAlpha(1);
+        scene.comboText.setScale(comboCount / 10 + 1);
+      } else {
+        scene.comboText.setAlpha(0);
+      }
+    }
+
+    // ================== START GAME ==================
+    function startGame(scene) {
+      // Clear title screen
+      scene.children.removeAll();
+
+      // Remove touch controls from title screen
+      scene.input.removeAllListeners();
+
+      // Add touch controls for gameplay
+      addTouchControls(scene);
+
+      // Create player
+      player = createPlayer(scene);
+
+      // Create initial terrain
+      createTerrain(scene);
+
+      // Set game state
+      gameActive = true;
+      score = 0;
+      fuel = 100;
+      lives = 3;
+      comboCount = 0;
+      distance = 0;
+      lastBossSpawn = 0;
+      lastFuelSpawn = 0;
+      lastEnemySpawn = 0;
+
+      // Start audio
+      AudioSystem.init();
+    }
+
+    // ================== PLAYER ==================
+    function createPlayer(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Solvalou-style ship
+      const ship = scene.add.graphics();
+      ship.lineStyle(2, 0x00ff00, 1);
+      ship.fillStyle(0x111111, 1);
+      ship.beginPath();
+      ship.moveTo(w/2, h - 150);
+      ship.lineTo(w/2 - 20, h - 100);
+      ship.lineTo(w/2 + 20, h - 100);
+      ship.closePath();
+      ship.strokePath();
+      ship.fillPath();
+
+      // Engine glow
+      const engine = scene.add.graphics();
+      engine.lineStyle(2, 0x00ffff, 1);
+      engine.fillStyle(0x00aaaa, 1);
+      engine.beginPath();
+      engine.moveTo(w/2 - 8, h - 105);
+      engine.lineTo(w/2, h - 85);
+      engine.lineTo(w/2 + 8, h - 105);
+      engine.closePath();
+      engine.strokePath();
+      engine.fillPath();
+
+      // Store references
+      ship.data = { type: 'player', health: 1 };
+      engine.setData('parent', ship);
+
+      // Animate engine
+      scene.tweens.add({
+        targets: engine,
+        alpha: 0.5,
+        duration: 200,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+
+      return ship;
+    }
+
+    // ================== TERRAIN ==================
+    function createTerrain(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Ground
+      const ground = scene.add.graphics();
+      ground.fillStyle(0x2d5016, 1);
+      ground.fillRect(0, h - 100, w, 100);
+
+      // Mountain silhouettes
+      for (let i = 0; i < 5; i++) {
+        const x = Math.random() * w;
+        const y = h - 120 - Math.random() * 50;
+        const size = 30 + Math.random() * 40;
+        const mtn = scene.add.graphics();
+        mtn.fillStyle(0x1a3309, 1);
+        mtn.beginPath();
+        mtn.moveTo(x - size, y + size);
+        mtn.lineTo(x, y);
+        mtn.lineTo(x + size, y + size);
+        mtn.closePath();
+        mtn.fillPath();
+        terrain.push({ obj: mtn, speed: 0.5 + Math.random() * 0.5 });
+      }
+
+      // Trees
+      for (let i = 0; i < 15; i++) {
+        const x = Math.random() * w;
+        const y = h - 110 - Math.random() * 80;
+        const tree = scene.add.graphics();
+        tree.fillStyle(0x0d4d00, 1);
+        tree.fillCircle(x, y, 8 + Math.random() * 6);
+        terrain.push({ obj: tree, speed: 1 + Math.random() });
+      }
+
+      // Road
+      const road = scene.add.graphics();
+      road.fillStyle(0x444444, 1);
+      road.fillRect(w/2 - 30, 0, 60, h);
+      road.lineStyle(2, 0xffff00, 0.5);
+      road.setLineDash([20, 20]);
+      road.lineBetween(w/2, 0, w/2, h);
+      terrain.push({ obj: road, speed: 2 });
+    }
+
+    function updateTerrain(scene, delta) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Move terrain elements
+      terrain.forEach(item => {
+        item.obj.y += item.speed * delta / 16;
+        if (item.obj.y > h + 50) {
+          item.obj.y = -50;
+          item.obj.x = Math.random() * w;
+        }
+      });
+    }
+
+    // ================== ENEMIES ==================
+    function spawnEnemy(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+      const type = Math.random() < 0.2 ? 'boss' : Math.random() < 0.5 ? 'fighter' : 'bomber';
+
+      const enemy = scene.add.graphics();
+      let data = { type: 'enemy', health: 1, speed: 2, shootChance: 0.001, points: 100 };
+
+      if (type === 'fighter') {
+        enemy.lineStyle(2, 0xff0000, 1);
+        enemy.fillStyle(0x330000, 1);
+        enemy.beginPath();
+        enemy.moveTo(w/2 - 15 + Math.random() * (w - 30), -20);
+        enemy.lineTo(w/2 - 30 + Math.random() * (w - 30), 20);
+        enemy.lineTo(w/2 + 15 + Math.random() * (w - 30), -20);
+        enemy.closePath();
+        enemy.strokePath();
+        enemy.fillPath();
+        data.health = 1;
+        data.speed = 3;
+        data.shootChance = 0.003;
+        data.points = 50;
+      } else if (type === 'bomber') {
+        enemy.lineStyle(2, 0xffaa00, 1);
+        enemy.fillStyle(0x442200, 1);
+        enemy.fillRect(w/2 - 15 + Math.random() * (w - 30), -20, 30, 30);
+        data.health = 2;
+        data.speed = 1.5;
+        data.shootChance = 0.005;
+        data.points = 150;
+      } else if (type === 'boss') {
+        enemy.lineStyle(3, 0xff00ff, 1);
+        enemy.fillStyle(0x330033, 1);
+        enemy.beginPath();
+        enemy.moveTo(w/2 - 40, -40);
+        enemy.lineTo(w/2 - 20, 0);
+        enemy.lineTo(w/2 + 20, 0);
+        enemy.lineTo(w/2 + 40, -40);
+        enemy.closePath();
+        enemy.strokePath();
+        enemy.fillPath();
+        data.health = 10;
+        data.speed = 0.5;
+        data.shootChance = 0.01;
+        data.points = 1000;
+        bossActive = true;
+      }
+
+      enemy.setData('type', type);
+      enemy.setData('health', data.health);
+      enemy.setData('speed', data.speed);
+      enemy.setData('shootChance', data.shootChance);
+      enemy.setData('points', data.points);
+      enemy.data = data;
+
+      enemies.push(enemy);
+    }
+
+    function spawnBoss(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Boss alert sound
+      AudioSystem.playBossAlert();
+
+      // Create boss
+      const boss = scene.add.graphics();
+      boss.lineStyle(4, 0xff0000, 1);
+      boss.fillStyle(0x440000, 1);
+      boss.beginPath();
+      boss.moveTo(w/2 - 60, -60);
+      boss.lineTo(w/2 - 30, 0);
+      boss.lineTo(w/2 + 30, 0);
+      boss.lineTo(w/2 + 60, -60);
+      boss.closePath();
+      boss.strokePath();
+      boss.fillPath();
+
+      // Boss core
+      boss.lineStyle(2, 0xffff00, 1);
+      boss.fillStyle(0xffff00, 0.5);
+      boss.fillCircle(w/2, -30, 15);
+
+      boss.setData('type', 'boss');
+      boss.setData('health', 20);
+      boss.setData('speed', 0.3);
+      boss.setData('shootChance', 0.02);
+      boss.setData('points', 5000);
+      boss.data = { type: 'boss', health: 20, speed: 0.3, shootChance: 0.02, points: 5000 };
+
+      enemies.push(boss);
+      bossActive = true;
+    }
+
+    function updateEnemies(scene, delta) {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const enemy = enemies[i];
+        const data = enemy.data;
+
+        // Move down
+        enemy.y += data.speed * delta / 16;
+
+        // Side to side for fighters
+        if (data.type === 'fighter') {
+          enemy.x += Math.sin(scene.time.now / 500 + i) * 2;
+        }
+
+        // Shoot
+        if (Math.random() < data.shootChance * delta / 16) {
+          enemyShoot(scene, enemy);
+        }
+
+        // Remove off-screen
+        if (enemy.y > scene.scale.height + 50) {
+          scene.children.remove(enemy);
+          enemies.splice(i, 1);
+        }
+      }
+    }
+
+    function enemyShoot(scene, enemy) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Enemy bullet
+      const bullet = scene.add.graphics();
+      bullet.lineStyle(2, 0xff0000, 1);
+      bullet.fillStyle(0xff0000, 1);
+      bullet.fillCircle(enemy.x, enemy.y, 3);
+      bullet.data = { type: 'enemyBullet', speed: 4 };
+
+      enemyBullets.push(bullet);
+    }
+
+    function updateEnemyBullets(scene, delta) {
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        const bullet = enemyBullets[i];
+        bullet.y += bullet.data.speed * delta / 16;
+
+        // Remove off-screen
+        if (bullet.y > scene.scale.height + 20) {
+          scene.children.remove(bullet);
+          enemyBullets.splice(i, 1);
+        }
+      }
+    }
+
+    // ================== BULLETS ==================
+    function updatePlayer(scene, time, delta) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Movement
+      if (touchLeft) {
+        player.x = Math.max(30, player.x - 5 * delta / 16);
+      }
+      if (touchRight) {
+        player.x = Math.min(w - 30, player.x + 5 * delta / 16);
+      }
+
+      // Shooting
+      if (touchShoot && time - lastShootTime > 150) {
+        shootBullet(scene);
+        lastShootTime = time;
+      }
+
+      // Bomb
+      if (touchBomb && time - lastBombTime > 500) {
+        dropBomb(scene);
+        lastBombTime = time;
+      }
+    }
+
+    function shootBullet(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Zapper bullet
+      const bullet = scene.add.graphics();
+      bullet.lineStyle(2, 0x00ff00, 1);
+      bullet.fillStyle(0x00ff00, 1);
+      bullet.fillCircle(player.x, player.y - 30, 3);
+      bullet.data = { type: 'bullet', speed: 8 };
+
+      bullets.push(bullet);
+      AudioSystem.playShoot();
+    }
+
+    function dropBomb(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Blaster bomb
+      const bomb = scene.add.graphics();
+      bomb.lineStyle(2, 0xffff00, 1);
+      bomb.fillStyle(0xffff00, 1);
+      bomb.fillCircle(player.x, player.y + 20, 5);
+      bomb.data = { type: 'bomb', speed: 3 };
+
+      bullets.push(bomb);
+      AudioSystem.playBomb();
+    }
+
+    function updateBullets(scene, delta) {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bullet = bullets[i];
+        bullet.y -= bullet.data.speed * delta / 16;
+
+        // Remove off-screen
+        if (bullet.y < -20) {
+          scene.children.remove(bullet);
+          bullets.splice(i, 1);
+        }
+      }
+    }
+
+    // ================== FUEL ==================
+    function spawnFuel(scene) {
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      const fuel = scene.add.graphics();
+      fuel.lineStyle(2, 0x00ffff, 1);
+      fuel.fillStyle(0x00ffff, 0.5);
+      fuel.fillCircle(Math.random() * (w - 40) + 20, -20, 10);
+      fuel.data = { type: 'fuel' };
+
+      fuelPickups.push(fuel);
+    }
+
+    function updateFuelPickups(scene, delta) {
+      for (let i = fuelPickups.length - 1; i >= 0; i--) {
+        const fuel = fuelPickups[i];
+        fuel.y += 2 * delta / 16;
+
+        // Remove off-screen
+        if (fuel.y > scene.scale.height + 20) {
+          scene.children.remove(fuel);
+          fuelPickups.splice(i, 1);
+        }
+      }
+    }
+
+    // ================== COLLISIONS ==================
+    function checkCollisions(scene) {
+      // Bullets vs enemies
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bullet = bullets[i];
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const enemy = enemies[j];
+          if (Math.abs(bullet.x - enemy.x) < 25 && Math.abs(bullet.y - enemy.y) < 25) {
+            // Hit enemy
+            enemy.data.health--;
+            scene.children.remove(bullet);
+            bullets.splice(i, 1);
+
+            if (enemy.data.health <= 0) {
+              // Enemy destroyed
+              score += enemy.data.points;
+              AudioSystem.playExplosion();
+              scene.children.remove(enemy);
+              enemies.splice(j, 1);
+              shakeTime = 200;
+              flashTime = 100;
+
+              // Combo
+              comboCount++;
+              comboTimer = 2000;
+            }
+            break;
+          }
+        }
+      }
+
+      // Enemy bullets vs player
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        const bullet = enemyBullets[i];
+        if (Math.abs(bullet.x - player.x) < 20 && Math.abs(bullet.y - player.y) < 25) {
+          // Hit player
+          AudioSystem.playHit();
+          scene.children.remove(bullet);
+          enemyBullets.splice(i, 1);
+          loseLife(scene);
+          break;
+        }
+      }
+
+      // Enemies vs player
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const enemy = enemies[i];
+        if (Math.abs(enemy.x - player.x) < 25 && Math.abs(enemy.y - player.y) < 30) {
+          // Crash
+          AudioSystem.playExplosion();
+          scene.children.remove(enemy);
+          enemies.splice(i, 1);
+          loseLife(scene);
+          shakeTime = 300;
+          flashTime = 150;
+          break;
+        }
+      }
+
+      // Fuel vs player
+      for (let i = fuelPickups.length - 1; i >= 0; i--) {
+        const fuel = fuelPickups[i];
+        if (Math.abs(fuel.x - player.x) < 25 && Math.abs(fuel.y - player.y) < 25) {
+          // Collect fuel
+          fuel = Math.min(100, fuel + 30);
+          AudioSystem.playFuelPickup();
+          scene.children.remove(fuel);
+          fuelPickups.splice(i, 1);
+          break;
+        }
+      }
+    }
+
+    function loseLife(scene) {
+      lives--;
+      shakeTime = 500;
+      flashTime = 300;
+
+      if (lives <= 0) {
+        gameOver(scene);
+      }
+    }
+
+    function gameOver(scene) {
+      gameActive = false;
+
+      // Update high score
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('starBlasterHigh', highScore.toString());
+      }
+
+      // Show game over screen
+      const w = scene.scale.width;
+      const h = scene.scale.height;
+
+      // Overlay
+      const overlay = scene.add.graphics();
+      overlay.fillStyle(0x000000, 0.8);
+      overlay.fillRect(0, 0, w, h);
+
+      // Game over text
+      const goText = scene.add.text(w/2, h/2 - 80, 'GAME OVER', {
+        fontSize: '48px',
+        fontFamily: 'Arial',
+        color: '#ff0000',
+        stroke: '#000000',
+        strokeThickness: 6,
+        align: 'center'
+      });
+      goText.setOrigin(0.5);
+      goText.setDepth(100);
+
+      // Score
+      const scoreText = scene.add.text(w/2, h/2, `SCORE: ${score}`, {
+        fontSize: '24px',
+        fontFamily: 'Arial',
+        color: '#00ff00',
+        align: 'center'
+      });
+      scoreText.setOrigin(0.5);
+      scoreText.setDepth(100);
+
+      // High score
+      const highText = scene.add.text(w/2, h/2 + 40, `HIGH SCORE: ${highScore}`, {
+        fontSize: '18px',
+        fontFamily: 'Arial',
+        color: '#ffff00',
+        align: 'center'
+      });
+      highText.setOrigin(0.5);
+      highText.setDepth(100);
+
+      // Restart
+      const restartText = scene.add.text(w/2, h/2 + 100, 'TAP TO RESTART', {
+        fontSize: '18px',
+        fontFamily: 'Arial',
+        color: '#00ffff',
+        stroke: '#000000',
+        strokeThickness: 3,
+        align: 'center'
+      });
+      restartText.setOrigin(0.5);
+      restartText.setDepth(100);
+
+      restartText.setInteractive({ useHandCursor: true });
+      restartText.on('pointerdown', () => {
+        // Clear everything
+        scene.children.removeAll();
+        scene.input.removeAllListeners();
+
+        // Add touch controls
+        addTouchControls(scene);
+
+        // Show title again
+        showTitleScreen(scene);
+      });
+    }
+  </script>
 </body>
 </html>
