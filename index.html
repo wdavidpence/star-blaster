@@ -446,8 +446,8 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       const engine = scene.add.graphics();
       engine.x = px - 5;
       engine.y = py + 22;
-      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(0, 0, 10, 8);
-      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(0, 0, 6, 6);
+      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(engine.x, engine.y, 10, 8);
+      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(engine.x + 2, engine.y + 6, 6, 6);
       ship.data = { type: 'player', health: 1, engine: engine }; engine.setData('parent', ship);
       scene.tweens.add({ targets: engine, alpha: 0.4, duration: 120, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       return ship;
