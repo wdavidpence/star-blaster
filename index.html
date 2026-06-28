@@ -1,1043 +1,925 @@
-<!-- CHANGELOG
-Iteration 1: Added scrolling starfield background that scrolls continuously during gameplay
-Iteration 2: Added keyboard controls (Arrow keys + Space) in addition to touch
-Iteration 3: Fixed terrain - proper parallax scrolling layers (mountains slower than ground)
-Iteration 4: Added Scav ground scanner (Down key extends scanner, marks ground units)
-Iteration 5: Added Solvalou air unit (S key splits air unit with own zapper)
-Iteration 6: Fixed Blaster bombs to dive DOWN from player position
-Iteration 7: Added ground war enemies (infantry running, tanks, missile launchers)
-Iteration 8: Improved enemy behaviors - fighters weave/swoop, bombers lead shots, bosses multiple weak points
-Iteration 9: Added particle explosions and screen shake effects
-Iteration 10: Added combo system visual feedback
-Iteration 11: Added missile warnings (flashing text on incoming missiles)
-Iteration 12: Added high score display (current + high score on game over + HUD)
-Iteration 13: Fixed Scav scanner object leak (persistent graphics object)
-Iteration 14: Fixed Solvalou/player input conflict - arrows control only Solvalou when active
-Iteration 15: Added Scav marking mechanic - marked ground enemies take double damage from bombs
-Iteration 16: Added difficulty curve with wave announcements (WAVE 1, WAVE 2, etc.)
-Iteration 17: Added invincibility frames (1.5s) after losing a life
-Iteration 18: Added bullet trail effects (green for zapper, yellow for bombs)
-Iteration 19: Added score popups that float up and fade on kills
-Iteration 20: Added ground terrain details (buildings, water, bridges)
-Iteration 21: Added pause functionality (P or Escape)
-Iteration 22: Added background music loop and improved title screen
-Iteration 23: Added weapon upgrade system (single → double → triple shot)
-Iteration 24: Added power-up drops (weapon upgrade, extra life, shield)
-Iteration 25: Added shield power-up with visual effect
-Iteration 26: Added enemy variety (fast scouts, armored enemies)
-Iteration 27: Added boss phase transitions (changes attack pattern at 50% HP)
-Iteration 28: Added screen flash on boss damage
-Iteration 29: Improved particle effects for different enemy types
-Iteration 30: Improved difficulty scaling with enemy spawn rates
-Iteration 31: Added boss multi-phase attack patterns (changes at 75%, 50%, 25% HP)
-Iteration 32: Added boss weak point targeting system
-Iteration 33: Added screen flash on boss damage
-Iteration 34: Improved particle effects for different enemy types
-Iteration 35: Added combo multiplier system (consecutive kills increase score)
-Iteration 36: Added wave announcements with difficulty scaling
-Iteration 37: Added invincibility frames after death (1.5s)
-Iteration 38: Added bullet trail effects
-Iteration 39: Added score popups on kills
-Iteration 40: Added ground terrain details with buildings and water
--->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Star Blaster</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
-  <style>
-    body { margin: 0; padding: 0; background: #000; overflow: hidden; touch-action: none; }
-    #game-container { width: 100vw; height: 100vh; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Star Blaster</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+  canvas { display: block; }
+  #hud { position: absolute; top: 10px; left: 0; right: 0; z-index: 10; pointer-events: none; padding: 0 20px; display: flex; justify-content: space-between; font-family: 'Courier New', monospace; }
+  #hud div { color: #0ff; text-shadow: 0 0 8px #0ff; font-size: 16px; line-height: 1.4; }
+  #comboText { position: absolute; top: 55px; left: 20px; z-index: 10; pointer-events: none; color: #ff0; text-shadow: 0 0 12px #ff0; font-family: 'Courier New', monospace; font-size: 18px; opacity: 0; transition: opacity 0.3s; }
+  #overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); }
+  #overlay h1 { color: #0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 20px #0ff; margin-bottom: 10px; font-size: 32px; }
+  #overlay p { color: #aaa; font-family: 'Courier New', monospace; margin-bottom: 8px; font-size: 14px; }
+  #overlay button { background: transparent; border: 2px solid #0ff; color: #0ff; padding: 15px 40px; font-family: 'Courier New', monospace; font-size: 18px; cursor: pointer; margin-top: 20px; text-shadow: 0 0 10px #0ff; box-shadow: 0 0 15px rgba(0,255,255,0.3); }
+  #overlay button:hover { background: rgba(0,255,255,0.15); }
+  #overlay .score-display { color: #ff0; font-size: 24px; margin-top: 10px; text-shadow: 0 0 15px #ff0; }
+  #overlay .high-score { color: #f80; font-size: 16px; margin-top: 5px; text-shadow: 0 0 10px #f80; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
 </head>
 <body>
-  <div id="game-container"></div>
-  <script>
-    // ================== AUDIO SYSTEM ==================
-    const AudioSystem = {
-      ctx: null, masterGain: null, musicGain: null, musicOsc: null, musicNote: 0,
-      musicInterval: null,
-      init() {
-        if (this.ctx) return;
-        try {
-          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-          this.masterGain = this.ctx.createGain();
-          this.masterGain.gain.value = 0.7;
-          this.masterGain.connect(this.ctx.destination);
-          this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.12;
-          this.musicGain.connect(this.masterGain);
-        } catch (e) { console.error('Audio init failed:', e); }
-      },
-      resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
-      // Simple arpeggio loop - low hum
-      startMusic() {
-        if (this.musicInterval) return;
-        const notes = [110, 146.8, 164.8, 146.8, 130.8, 110, 98, 110];
-        let idx = 0;
-        this.musicInterval = setInterval(() => {
-          if (!this.ctx || this.ctx.state !== 'running') return;
-          const osc = this.ctx.createOscillator();
-          const g = this.ctx.createGain();
-          osc.connect(g); g.connect(this.musicGain);
-          osc.type = 'sine';
-          osc.frequency.value = notes[idx];
-          g.gain.setValueAtTime(0.3, this.ctx.currentTime);
-          g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
-          osc.start(); osc.stop(this.ctx.currentTime + 0.5);
-          idx = (idx + 1) % notes.length;
-        }, 500);
-      },
-      stopMusic() { if (this.musicInterval) { clearInterval(this.musicInterval); this.musicInterval = null; } },
-      playShoot() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(880, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(440, this.ctx.currentTime + 0.1);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.1);
-      },
-      playBomb() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(180, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(80, this.ctx.currentTime + 0.2);
-        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.2);
-      },
-      playExplosion() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(120, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.3);
-        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.3);
-      },
-      playHit() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(220, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.15);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.15);
-      },
-      playBossAlert() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(55, this.ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(65, this.ctx.currentTime + 1);
-        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 1);
-        osc.start(); osc.stop(this.ctx.currentTime + 1);
-      },
-      playFuelPickup() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sine'; osc.frequency.setValueAtTime(440, this.ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(880, this.ctx.currentTime + 0.2);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.2);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.2);
-      },
-      playWaveAnnounce() {
-        if (!this.ctx) return;
-        for (let i = 0; i < 3; i++) {
-          const osc = this.ctx.createOscillator(), g = this.ctx.createGain();
-          osc.connect(g); g.connect(this.masterGain);
-          osc.type = 'triangle';
-          const t = this.ctx.currentTime + i * 0.15;
-          osc.frequency.setValueAtTime(440 + i * 100, t);
-          g.gain.setValueAtTime(0.3, t);
-          g.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
-          osc.start(t); osc.stop(t + 0.2);
-        }
+
+<div id="hud">
+  <div><span id="scoreText">SCORE: 0</span></div>
+  <div><span id="waveText">WAVE 1</span></div>
+  <div><span id="livesText">♥ ♥ ♥</span></div>
+</div>
+
+<div id="comboText"></div>
+
+<div id="overlay" style="display:flex;">
+  <h1>STAR BLASTER</h1>
+  <p>Tap left / right to move</p>
+  <p>Tap center to shoot</p>
+  <button id="startBtn">START GAME</button>
+</div>
+
+<script>
+const W = () => window.innerWidth;
+const H = () => window.innerHeight;
+
+// --- Audio Synthesizer (no external files needed) ---
+class SoundFX {
+  constructor(ctx) { this.ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); }
+  
+  shoot() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.exponentialRampToValueAtTime(440, t + 0.1);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.start(t); osc.stop(t + 0.12);
+  }
+
+  explosion() {
+    const c = this.ctx, t = c.currentTime;
+    const bufferSize = Math.floor(c.sampleRate * 0.3);
+    const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+    }
+    const source = c.createBufferSource();
+    source.buffer = buffer;
+    const gain = c.createGain();
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1000, t);
+    filter.frequency.exponentialRampToValueAtTime(200, t + 0.3);
+    source.connect(filter); filter.connect(gain); gain.connect(c.destination);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    source.start(t); source.stop(t + 0.35);
+  }
+
+  bigExplosion() {
+    const c = this.ctx, t = c.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const bufferSize = Math.floor(c.sampleRate * 0.4);
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let j = 0; j < bufferSize; j++) {
+        data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / bufferSize, 1.5);
       }
-    };
+      const source = c.createBufferSource();
+      source.buffer = buffer;
+      const gain = c.createGain();
+      const filter = c.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, t + i * 0.1);
+      filter.frequency.exponentialRampToValueAtTime(150, t + i * 0.1 + 0.4);
+      source.connect(filter); filter.connect(gain); gain.connect(c.destination);
+      gain.gain.setValueAtTime(i === 0 ? 0.35 : 0.25, t + i * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.45);
+      source.start(t + i * 0.1); source.stop(t + i * 0.1 + 0.45);
+    }
+  }
 
-    // ================== GAME STATE ==================
-    let game, player, bullets = [], enemies = [], enemyBullets = [], fuelPickups = [], powerups = [], terrain = [], particles = [];
-    let score = 0, fuel = 100, lives = 3, gameActive = false, bossActive = false;
-    let comboCount = 0, comboTimer = 0, difficulty = 1, distance = 0, highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
-    let lastShootTime = 0, lastBombTime = 0, lastBossSpawn = 0, lastFuelSpawn = 0, lastEnemySpawn = 0, shakeTime = 0, flashTime = 0;
-    let touchLeft = false, touchRight = false, touchShoot = false, touchBomb = false;
-    let keys = {};
-    let scavActive = false, solvalou = null, groundEnemies = [], missileWarnings = [];
-    let scavGraphics = null;
-    let invincibleUntil = 0;
-    let isPaused = false;
-    let waveNum = 0, lastWaveTime = 0, waveAnnounceTimer = 0;
-    let scorePopups = [];
-    let titleStarAnim = [];
-    let weaponLevel = 1, shieldActive = false, shieldTimer = 0;
+  powerup() {
+    const c = this.ctx, t = c.currentTime;
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t + i * 0.08);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.15, t + i * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.2);
+      osc.start(t + i * 0.08); osc.stop(t + i * 0.08 + 0.25);
+    });
+  }
 
-    const config = {
-      type: Phaser.AUTO, parent: 'game-container',
-      width: window.innerWidth, height: window.innerHeight, backgroundColor: '#000',
-      scene: { preload: preload, create: create, update: update }
-    };
+  hit() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+    gain.gain.setValueAtTime(0.2, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    osc.start(t); osc.stop(t + 0.15);
+  }
 
-    function preload() {}
+  gameOver() {
+    const c = this.ctx, t = c.currentTime;
+    [440, 392, 349, 330].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t + i * 0.25);
+      gain.gain.setValueAtTime(0.18, t + i * 0.25);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.25 + 0.4);
+      osc.start(t + i * 0.25); osc.stop(t + i * 0.25 + 0.45);
+    });
+  }
 
-    function create() {
-      this.input.on('pointerdown', () => { AudioSystem.init(); AudioSystem.resume(); });
-      showTitleScreen(this);
-      addTouchControls(this);
-      addHUD(this);
-      gameActive = false;
-      this.input.keyboard.on('keydown', (e) => { keys[e.key] = true; handleKeyboard(this, e); });
-      this.input.keyboard.on('keyup', (e) => { keys[e.key] = false; });
+  wave() {
+    const c = this.ctx, t = c.currentTime;
+    [330, 440, 660].forEach((freq, i) => {
+      const osc = c.createOscillator(), gain = c.createGain();
+      osc.connect(gain); gain.connect(c.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + i * 0.12);
+      gain.gain.setValueAtTime(0.1, t + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.3);
+      osc.start(t + i * 0.12); osc.stop(t + i * 0.12 + 0.35);
+    });
+  }
+
+  combo() {
+    const c = this.ctx, t = c.currentTime;
+    const osc = c.createOscillator(), gain = c.createGain();
+    osc.connect(gain); gain.connect(c.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1200, t);
+    osc.frequency.exponentialRampToValueAtTime(1600, t + 0.05);
+    gain.gain.setValueAtTime(0.1, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc.start(t); osc.stop(t + 0.1);
+  }
+}
+
+let sfx;
+
+class MainScene extends Phaser.Scene {
+  constructor() { super('MainScene'); }
+
+  createTextures() {
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    // Player ship - sleek triangle with wing accents
+    g.clear();
+    g.fillStyle(0x00ffc8, 1);
+    g.beginPath();
+    g.moveTo(24, 0);
+    g.lineTo(0, 56);
+    g.lineTo(24, 44);
+    g.lineTo(48, 56);
+    g.closePath();
+    g.fillPath();
+    // Wing detail lines
+    g.lineStyle(1.5, 0x00aa88, 0.8);
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(8, 48);
+    g.strokePath();
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(40, 48);
+    g.strokePath();
+    this.generateTexture('ship', 48, 56);
+
+    // Engine glow - animated flame
+    g.clear();
+    g.fillStyle(0x00aaff, 1);
+    g.beginPath();
+    g.moveTo(12, 56);
+    g.lineTo(24, 72 + Math.random() * 8);
+    g.lineTo(36, 56);
+    g.closePath();
+    g.fillPath();
+    this.generateTexture('engine', 48, 72);
+
+    // Enemy type A - red diamond with inner detail
+    g.clear();
+    g.fillStyle(0xff3344, 1);
+    g.beginPath();
+    g.moveTo(24, 0);
+    g.lineTo(48, 24);
+    g.lineTo(24, 48);
+    g.lineTo(0, 24);
+    g.closePath();
+    g.fillPath();
+    g.lineStyle(1.5, 0xff6677, 0.6);
+    g.beginPath();
+    g.moveTo(24, 8);
+    g.lineTo(40, 24);
+    g.lineTo(24, 40);
+    g.lineTo(8, 24);
+    g.closePath();
+    g.strokePath();
+    this.generateTexture('enemyA', 48, 48);
+
+    // Enemy type B - purple hexagon with core
+    g.clear();
+    g.fillStyle(0xcc33ff, 1);
+    g.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2;
+      const x = 24 + 24 * Math.cos(angle);
+      const y = 24 + 24 * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.fillPath();
+    // Inner hexagon
+    g.lineStyle(1.5, 0xff66ff, 0.5);
+    g.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2;
+      const x = 24 + 14 * Math.cos(angle);
+      const y = 24 + 14 * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.strokePath();
+    this.generateTexture('enemyB', 48, 48);
+
+    // Enemy type C - big boss octagon with core glow
+    g.clear();
+    g.fillStyle(0xff6600, 1);
+    g.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const angle = (Math.PI / 4) * i - Math.PI / 2;
+      const r = i % 2 === 0 ? 36 : 24;
+      const x = 36 + r * Math.cos(angle);
+      const y = 36 + r * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.fillPath();
+    // Core circle
+    g.fillStyle(0xffaa44, 1);
+    g.beginPath();
+    g.arc(36, 36, 12, 0, Math.PI * 2);
+    g.fillPath();
+    this.generateTexture('enemyC', 72, 72);
+
+    // Bullet - cyan beam with glow
+    g.clear();
+    g.fillStyle(0x88ffff, 1);
+    g.fillRect(3, 0, 6, 24);
+    g.fillStyle(0xffffff, 1);
+    g.fillRect(5, 2, 2, 20);
+    this.generateTexture('bullet', 6, 24);
+
+    // Enemy bullet - red beam
+    g.clear();
+    g.fillStyle(0xff4444, 1);
+    g.fillRect(3, 0, 6, 18);
+    g.fillStyle(0xffaaaa, 1);
+    g.fillRect(5, 2, 2, 14);
+    this.generateTexture('enemyBullet', 6, 18);
+
+    // Powerup - green circle with ring and sparkle
+    g.clear();
+    g.lineStyle(3, 0x00ff00, 1);
+    g.fillStyle(0x00ff00, 1);
+    g.fillCircle(16, 16, 14);
+    // Sparkle cross
+    g.lineStyle(2, 0xffffff, 0.8);
+    g.beginPath(); g.moveTo(16, 5); g.lineTo(16, 27); g.strokePath();
+    g.beginPath(); g.moveTo(5, 16); g.lineTo(27, 16); g.strokePath();
+    this.generateTexture('powerup', 32, 32);
+
+    // Explosion particles - multi-layered
+    g.clear();
+    g.fillStyle(0xffaa00, 1);
+    g.beginPath(); g.arc(8, 8, 8, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('explosion', 16, 16);
+
+    // Small explosion flash
+    g.clear();
+    g.fillStyle(0xffff88, 1);
+    g.beginPath(); g.arc(4, 4, 4, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('flash', 8, 8);
+
+    // Star particle (background)
+    g.clear();
+    g.fillStyle(0xffffff, 1);
+    g.beginPath(); g.arc(3, 3, 3, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('star', 6, 6);
+
+    // Shield visual - pulsing hexagon
+    g.clear();
+    g.lineStyle(3, 0x00ff88, 1);
+    g.fillStyle(0x00ff88, 0.2);
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 2;
+      const x = 24 + 36 * Math.cos(angle);
+      const y = 24 + 36 * Math.sin(angle);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath();
+    g.fillPath();
+    g.strokePath();
+    this.generateTexture('shield', 48, 48);
+
+    // Trail particle for ship
+    g.clear();
+    g.fillStyle(0x00ccff, 1);
+    g.beginPath(); g.arc(3, 3, 3, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('trail', 6, 6);
+
+    // Score popup text background (circle)
+    g.clear();
+    g.fillStyle(0x000000, 0.5);
+    g.beginPath(); g.arc(18, 18, 18, 0, Math.PI * 2); g.fillPath();
+    this.generateTexture('scoreBg', 36, 36);
+
+    g.destroy();
+  }
+
+  create() {
+    // Generate all procedural textures FIRST — without these, sprites can't render
+    this.createTextures();
+    console.log('[StarBlaster] Textures generated:', Object.keys(this.textures).slice(-15));
+
+    this.score = 0;
+    this.lives = 3;
+    this.wave = 1;
+    this.gameOver = false;
+    this.shieldActive = false;
+    this.speedBoost = false;
+    this.comboCount = 0;
+    this.comboTimer = 0;
+    this.highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
+
+    // Background starfield - multi-layer parallax
+    this.stars = [];
+    for (let layer = 0; layer < 3; layer++) {
+      const count = [60, 40, 25][layer];
+      const speed = [1.5, 3, 5][layer];
+      const size = [6, 4, 3][layer];
+      for (let i = 0; i < count; i++) {
+        const star = this.add.sprite(
+          Phaser.Math.Between(0, W()),
+          Phaser.Math.Between(0, H()),
+          'star'
+        );
+        star.setAlpha(Phaser.Math.FloatBetween(0.3, 1));
+        star.setDepth(layer + 1);
+        star.twinkleSpeed = Phaser.Math.FloatBetween(0.5, 2);
+        star.layer = layer;
+        star.speed = speed;
+        star.size = size;
+        this.stars.push(star);
+      }
     }
 
-    function update(time, delta) {
-      if (!gameActive || isPaused) return;
+    // Nebula background glow
+    const nebula = this.add.graphics();
+    nebula.fillStyle(0x1a0a3a, 0.3);
+    nebula.fillCircle(W() * 0.7, H() * 0.3, 200);
+    nebula.fillStyle(0x0a2a4a, 0.2);
+    nebula.fillCircle(W() * 0.3, H() * 0.6, 150);
+    this.nebula = nebula;
 
-      // Wave announcements
-      if (time - lastWaveTime > 20000) {
-        waveNum++;
-        lastWaveTime = time;
-        waveAnnounceTimer = 2000;
-        AudioSystem.playWaveAnnounce();
-      }
-      if (waveAnnounceTimer > 0) waveAnnounceTimer -= delta;
+    // Groups
+    this.bullets = this.physics.add.group({ defaultKey: 'bullet', maxSize: 30 });
+    this.enemies = this.physics.add.group({ defaultKey: 'enemyA', maxSize: 50 });
+    this.enemyBullets = this.physics.add.group({ defaultKey: 'enemyBullet', maxSize: 40 });
 
-      difficulty = 1 + Math.floor(time / 30000) * 0.12;
-      if (time - lastEnemySpawn > 1600 / difficulty) { spawnEnemy(this); lastEnemySpawn = time; }
-      if (time - lastBossSpawn > 45000) { spawnBoss(this); lastBossSpawn = time; }
-      if (time - lastFuelSpawn > 10000) { spawnFuel(this); lastFuelSpawn = time; }
-      if (time - lastFuelSpawn > 15000) { spawnPowerup(this); lastFuelSpawn = time; } // Iter 24: Power-ups
-      updatePlayer(this, time, delta);
-      updateBullets(this, delta);
-      updateEnemies(this, delta);
-      updateEnemyBullets(this, delta);
-      updateFuelPickups(this, delta);
-      updatePowerups(this, delta); // Iter 24
-      updateTerrain(this, delta);
-      updateGroundEnemies(this, delta);
-      updateParticles(this, delta);
-      updateSolvalou(this, delta);
-      updateScorePopups(this, delta);
-      checkCollisions(this);
-      if (comboTimer > 0) { comboTimer -= delta; if (comboTimer <= 0) comboCount = 0; }
-      if (time - (window.lastFuelCheck || 0) > 1000) {
-        fuel = Math.max(0, fuel - 1); window.lastFuelCheck = time;
-        if (fuel <= 0) loseLife(this);
-      }
-      distance += delta / 1000;
-      if (shakeTime > 0) shakeTime -= delta;
-      if (flashTime > 0) flashTime -= delta;
-      // Iter 25: Shield timer
-      if (shieldActive) {
-        shieldTimer -= delta;
-        if (shieldTimer <= 0) shieldActive = false;
-      }
-      updateHUD(this);
-      updateMissileWarnings(this);
-    }
+    // Player ship
+    this.ship = this.physics.add.sprite(W() / 2, H() - 100, 'ship');
+    this.ship.setCollideWorldBounds(true);
+    this.ship.setDepth(5);
+    this.ship.setDragY(-50);
+    this.ship.setBounce(0.3);
 
-    // ================== TITLE SCREEN (Iter 22) ==================
-    function showTitleScreen(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      const bg = scene.add.graphics(); bg.fillStyle(0x000033, 1); bg.fillRect(0, 0, w, h);
-      // Animated stars
-      titleStarAnim = [];
-      for (let i = 0; i < 120; i++) {
-        const s = scene.add.graphics();
-        const sz = 1 + Math.random() * 2.5;
-        s.fillStyle(0xffffff, 0.5 + Math.random() * 0.5);
-        s.fillRect(Math.random() * w, Math.random() * h, sz, sz);
-        s.setData('speed', 0.3 + Math.random() * 0.8);
-        titleStarAnim.push(s);
-      }
-      scene.tweens.add({
-        targets: titleStarAnim, y: '+=5', duration: 2000, yoyo: true, repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
-      const title = scene.add.text(w/2, h/2 - 100, 'STAR BLASTER', {
-        fontSize: '64px', fontFamily: 'Arial', fontStyle: 'bold', color: '#00ff00',
-        stroke: '#000000', strokeThickness: 6, align: 'center'
-      });
-      title.setOrigin(0.5); title.setDepth(100);
-      scene.tweens.add({ targets: title, scaleX: 1.05, scaleY: 1.05, duration: 1500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-      const sub = scene.add.text(w/2, h/2 - 30, 'Xevious-Style Arcade Shooter', {
-        fontSize: '20px', fontFamily: 'Arial', color: '#00ffff', align: 'center'
-      });
-      sub.setOrigin(0.5); sub.setDepth(100);
-      const instr = scene.add.text(w/2, h/2 + 60,
-        'ARROWS: Move | SPACE: Shoot | B: Bomb | DOWN: Scav | S: Solvalou\nCollect FUEL!', {
-        fontSize: '16px', fontFamily: 'Arial', color: '#ffffff', align: 'center'
-      });
-      instr.setOrigin(0.5); instr.setDepth(100);
-      const highText = scene.add.text(w/2, h/2 + 140, `HIGH SCORE: ${highScore}`, {
-        fontSize: '18px', fontFamily: 'Arial', color: '#ffff00'
-      });
-      highText.setOrigin(0.5); highText.setDepth(100);
-      const startBtn = scene.add.text(w/2, h/2 + 200, 'TAP TO START', {
-        fontSize: '24px', fontFamily: 'Arial', color: '#00ff00', stroke: '#000000', strokeThickness: 4
-      });
-      startBtn.setOrigin(0.5); startBtn.setDepth(100);
-      startBtn.setInteractive({ useHandCursor: true });
-      startBtn.on('pointerdown', () => startGame(scene));
-      scene.tweens.add({
-        targets: startBtn, scaleX: 1.1, scaleY: 1.1, duration: 800, yoyo: true, repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
-    }
+    // Engine glow behind ship
+    this.engine = this.add.sprite(this.ship.x, this.ship.y + 28, 'engine');
+    this.engine.setDepth(4);
 
-    // ================== TOUCH + KEYBOARD ==================
-    function addTouchControls(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      const leftZone = scene.add.rectangle(0, h/2, w/2, h, 0x000000, 0); leftZone.setDepth(50); leftZone.setInteractive();
-      leftZone.on('pointerdown', () => touchLeft = true); leftZone.on('pointerup', () => touchLeft = false);
-      const rightZone = scene.add.rectangle(w/2, h/2, w/2, h, 0x000000, 0); rightZone.setDepth(50); rightZone.setInteractive();
-      rightZone.on('pointerdown', () => touchRight = true); rightZone.on('pointerup', () => touchRight = false);
-      const fireZone = scene.add.rectangle(w/2, h/3, w/2, h/3, 0x000000, 0); fireZone.setDepth(50); fireZone.setInteractive();
-      fireZone.on('pointerdown', () => touchShoot = true); fireZone.on('pointerup', () => touchShoot = false);
-      const bombZone = scene.add.rectangle(w/2, h*0.75, w/2, h/3, 0x000000, 0); bombZone.setDepth(50); bombZone.setInteractive();
-      bombZone.on('pointerdown', () => touchBomb = true); bombZone.on('pointerup', () => touchBomb = false);
-    }
+    // Ship trail particles (spawned in update)
+    this.trailTimer = 0;
 
-    function handleKeyboard(scene, e) {
-      if (!gameActive) return;
-      if (e.key === ' ') { if (Date.now() - lastShootTime > 150) { shootBullet(scene); lastShootTime = Date.now(); } return; }
-      if (e.key.toLowerCase() === 'b') { if (Date.now() - lastBombTime > 500) { dropBomb(scene); lastBombTime = Date.now(); } return; }
-      if (e.key === 'ArrowDown') { scavActive = !scavActive; return; }
-      if (e.key.toLowerCase() === 's') { toggleSolvalou(scene); return; }
-      if (e.key.toLowerCase() === 'p' || e.key === 'Escape') {
-        isPaused = !isPaused;
-        if (isPaused) togglePauseOverlay(scene, true);
-        else togglePauseOverlay(scene, false);
-        return;
-      }
-    }
+    // Touch input zones
+    this.touchLeft = false;
+    this.touchRight = false;
+    this.touchShoot = false;
+    this.shootCooldown = false;
 
-    // ================== PAUSE OVERLAY (Iter 21) ==================
-    function togglePauseOverlay(scene, visible) {
-      let overlay = scene.getObjectAt ? scene.getObjectAt(0, Phaser.GameObjects.Graphics) : null;
-      let pauseText = null;
-      // Find existing pause overlay by checking for a graphics at specific depth
-      if (scene._pauseOverlay) {
-        pauseText = scene._pauseOverlay;
-      } else {
-        pauseText = scene.add.graphics();
-        pauseText.setDepth(200);
-        pauseText.alpha = 0;
-        scene._pauseOverlay = pauseText;
-      }
-      if (visible) {
-        pauseText.clear();
-        pauseText.fillStyle(0x000000, 0.7);
-        pauseText.fillRect(0, 0, scene.scale.width, scene.scale.height);
-        const txt = scene.add.text(scene.scale.width/2, scene.scale.height/2, 'PAUSED', {
-          fontSize: '56px', fontFamily: 'Arial', color: '#ffffff', stroke: '#000000', strokeThickness: 6
-        });
-        txt.setOrigin(0.5); txt.setDepth(210);
-        const sub = scene.add.text(scene.scale.width/2, scene.scale.height/2 + 50, 'Press P or ESC to resume', {
-          fontSize: '18px', fontFamily: 'Arial', color: '#88ff88', stroke: '#000000', strokeThickness: 3
-        });
-        sub.setOrigin(0.5); sub.setDepth(210);
-        pauseText.alpha = 1;
-      } else {
-        pauseText.alpha = 0;
-      }
-    }
+    const sw = W();
+    this.input.on('pointerdown', (p) => {
+      if (this.gameOver) return;
+      const x = p.x * (sw / this.scale.width);
+      if (x < sw / 3) this.touchLeft = true;
+      else if (x > sw * 2 / 3) this.touchRight = true;
+      else this.touchShoot = true;
+    });
 
-    // ================== HUD ==================
-    function addHUD(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      scene.scoreText = scene.add.text(10, 10, `SCORE: 0\nHIGH: ${highScore}`, {
-        fontSize: '14px', fontFamily: 'Arial', color: '#00ff00', stroke: '#000000', strokeThickness: 3
-      }); scene.scoreText.setDepth(60);
-      scene.fuelBar = scene.add.graphics(); scene.fuelBar.setDepth(60);
-      scene.fuelText = scene.add.text(w - 130, 10, 'FUEL', {
-        fontSize: '12px', fontFamily: 'Arial', color: '#00ffff', stroke: '#000000', strokeThickness: 2
-      }); scene.fuelText.setDepth(60);
-      scene.fuelBg = scene.add.graphics();
-      scene.fuelBg.lineStyle(1, 0x000000, 1); scene.fuelBg.strokeRect(w - 120, 25, 100, 15);
-      scene.fuelBg.setDepth(60);
-      scene.distanceText = scene.add.text(w/2, h - 20, `DIST: 0000`, {
-        fontSize: '12px', fontFamily: 'Arial', color: '#ffffff', stroke: '#000000', strokeThickness: 2, align: 'center'
-      }); scene.distanceText.setOrigin(0.5); scene.distanceText.setDepth(60);
-      scene.livesText = scene.add.text(10, h - 20, `LIVES: ${lives}`, {
-        fontSize: '14px', fontFamily: 'Arial', color: '#ff0000', stroke: '#000000', strokeThickness: 3
-      }); scene.livesText.setDepth(60);
-      scene.comboText = scene.add.text(w/2, h/3, '', {
-        fontSize: '24px', fontFamily: 'Arial', color: '#ffff00', stroke: '#000000', strokeThickness: 4, align: 'center'
-      }); scene.comboText.setOrigin(0.5); scene.comboText.setDepth(60); scene.comboText.setAlpha(0);
-      scene.warningText = scene.add.text(w/2, 80, '', {
-        fontSize: '20px', fontFamily: 'Arial', color: '#ff0000', stroke: '#000000', strokeThickness: 3, align: 'center'
-      }); scene.warningText.setOrigin(0.5); scene.warningText.setDepth(70); scene.warningText.setAlpha(0);
-      scene.waveText = scene.add.text(w/2, h/2 - 120, '', {
-        fontSize: '32px', fontFamily: 'Arial', color: '#ffffff', stroke: '#000000', strokeThickness: 4
-      }); scene.waveText.setOrigin(0.5); scene.waveText.setDepth(65); scene.waveText.setAlpha(0);
-    }
+    this.input.on('pointerup', () => {
+      this.touchLeft = false;
+      this.touchRight = false;
+      this.touchShoot = false;
+    });
 
-    function updateHUD(scene) {
-      scene.scoreText.setText(`SCORE: ${score}\nHIGH: ${highScore}`);
-      scene.fuelBar.clear();
-      const fuelPercent = fuel / 100;
-      const fuelColor = fuel > 50 ? 0x00ff00 : fuel > 20 ? 0xffff00 : 0xff0000;
-      scene.fuelBar.fillStyle(fuelColor, 1);
-      scene.fuelBar.fillRect(scene.scale.width - 119, 26, 98 * fuelPercent, 13);
-      scene.distanceText.setText(`DIST: ${Math.floor(distance).toString().padStart(4, '0')}`);
-      scene.livesText.setText(`LIVES: ${lives}`);
-      if (comboCount >= 2) {
-        scene.comboText.setText(`COMBO x${comboCount}`);
-        scene.comboText.setAlpha(1);
-        scene.comboText.setScale(comboCount / 10 + 1);
-      } else { scene.comboText.setAlpha(0); scene.comboText.setScale(1); }
-      // Wave announcement
-      if (waveAnnounceTimer > 0) {
-        scene.waveText.setText(`WAVE ${waveNum}`);
-        scene.waveText.setAlpha(Math.min(1, waveAnnounceTimer / 500));
-      } else {
-        scene.waveText.setAlpha(0);
-      }
-    }
+    // Collisions
+    this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+    this.physics.add.overlap(this.ship, this.enemies, this.hitShip, null, this);
+    this.physics.add.overlap(this.ship, this.enemyBullets, this.hitShip, null, this);
 
-    // ================== START GAME ==================
-    function startGame(scene) {
-      scene.children.removeAll(); scene.input.removeAllListeners();
-      AudioSystem.stopMusic();
-      addTouchControls(scene);
-      player = createPlayer(scene);
-      createTerrain(scene);
-      gameActive = true; isPaused = false;
-      score = 0; fuel = 100; lives = 3; comboCount = 0; distance = 0;
-      lastBossSpawn = lastFuelSpawn = lastEnemySpawn = lastWaveTime = 0;
-      waveNum = 0; waveAnnounceTimer = 0;
-      scavActive = false; solvalou = null; groundEnemies = []; missileWarnings = [];
-      bullets = []; enemies = []; enemyBullets = []; fuelPickups = []; particles = [];
-      scorePopups = []; invincibleUntil = 0;
-      scavGraphics = scene.add.graphics(); scavGraphics.setDepth(55); scavGraphics.setVisible(false);
-      AudioSystem.startMusic();
-    }
+    // Powerup group (hidden until needed)
+    this.powerups = this.physics.add.group({ defaultKey: 'powerup', maxSize: 5 });
+    this.physics.add.overlap(this.ship, this.powerups, this.collectPowerup, null, this);
 
-    // ================== PLAYER ==================
-    function createPlayer(scene) {
-      const w = scene.scale.width, h = scene.scale.height, px = w / 2, py = h - 120;
-      const ship = scene.add.graphics();
-      ship.fillStyle(0xcccccc, 1); ship.lineStyle(2, 0x888888, 1);
-      ship.fillRect(px - 8, py - 25, 16, 45); ship.strokeRect(px - 8, py - 25, 16, 45);
-      ship.fillStyle(0xaaaaaa, 1);
-      ship.fillTriangle(px - 8, py - 5, px - 28, py + 15, px - 8, py + 15);
-      ship.fillTriangle(px + 8, py - 5, px + 28, py + 15, px + 8, py + 15);
-      ship.lineStyle(2, 0x666666, 1);
-      ship.strokeTriangle(px - 8, py - 5, px - 28, py + 15, px - 8, py + 15);
-      ship.strokeTriangle(px + 8, py - 5, px + 28, py + 15, px + 8, py + 15);
-      ship.fillStyle(0x00ff88, 0.7); ship.fillCircle(px, py - 15, 5);
-      const engine = scene.add.graphics();
-      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(px - 5, py + 22, 10, 8);
-      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(px - 3, py + 28, 6, 6);
-      ship.data = { type: 'player', health: 1, engine: engine }; engine.setData('parent', ship);
-      scene.tweens.add({ targets: engine, alpha: 0.4, duration: 120, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-      return ship;
-    }
+    // HUD update interval
+    this.time.addEvent({ delay: 100, repeat: -1, callback: () => {
+      if (!this.gameOver) {
+        document.getElementById('scoreText').textContent = `SCORE: ${this.score}`;
+        document.getElementById('waveText').textContent = `WAVE ${this.wave}`;
+        let hearts = '';
+        for (let i = 0; i < this.lives; i++) hearts += '♥ ';
+        document.getElementById('livesText').textContent = hearts || 'NO LIVES';
 
-    function updatePlayer(scene, time, delta) {
-      const w = scene.scale.width;
-      // Iter 14: Solvalou takes input when active
-      if (solvalou) {
-        if (touchLeft) player.x = Math.max(30, player.x - 5 * delta / 16);
-        if (touchRight) player.x = Math.min(w - 30, player.x + 5 * delta / 16);
-      } else {
-        if (touchLeft || keys['ArrowLeft']) player.x = Math.max(30, player.x - 5 * delta / 16);
-        if (touchRight || keys['ArrowRight']) player.x = Math.min(w - 30, player.x + 5 * delta / 16);
-      }
-      if ((touchShoot || keys[' ']) && time - lastShootTime > 150) { shootBullet(scene); lastShootTime = time; }
-      if ((touchBomb || keys['b'] || keys['B']) && time - lastBombTime > 500) { dropBomb(scene); lastBombTime = time; }
-      // Scav scanner - persistent object (Iter 13)
-      if (scavGraphics) {
-        if (scavActive) {
-          scavGraphics.clear();
-          scavGraphics.lineStyle(2, 0x00ffff, 0.8);
-          scavGraphics.strokeRect(player.x - 40, scene.scale.height - 95, 80, 10);
-          scavGraphics.setVisible(true);
-          // Iter 15: Mark ground enemies under scav
-          markGroundEnemies(scene);
+        // Combo display
+        const comboEl = document.getElementById('comboText');
+        if (this.comboCount >= 3) {
+          comboEl.textContent = `COMBO x${this.comboCount}!`;
+          comboEl.style.opacity = Math.min(1, this.comboTimer / 2000);
         } else {
-          scavGraphics.setVisible(false);
+          comboEl.style.opacity = '0';
         }
       }
-      // Iter 25: Shield visual
-      if (shieldActive) {
-        if (!player.shield) {
-          player.shield = scene.add.graphics();
-          player.shield.lineStyle(3, 0x0088ff, 0.6);
-          player.shield.strokeCircle(player.x, player.y, 28);
-          player.shield.setDepth(59);
-        }
-        player.shield.x = player.x;
-        player.shield.y = player.y;
-        player.shield.setAlpha(0.4 + Math.sin(time / 150) * 0.2);
-      } else if (player.shield) {
-        scene.children.remove(player.shield);
-        player.shield = null;
+    }});
+
+    // Wave progression
+    this.time.addEvent({ delay: 8000, repeat: -1, callback: () => {
+      if (!this.gameOver) {
+        this.wave++;
+        this.enemySpawnRate = Math.max(400, this.enemySpawnRate - 150);
+
+        // Flash wave notification with sound
+        const waveText = this.add.text(W() / 2, H() / 2, `WAVE ${this.wave}`, {
+          fontSize: '48px', fontFamily: 'Courier New', color: '#0ff'
+        }).setOrigin(0.5).setDepth(15);
+        waveText.setAlpha(1);
+        this.tweens.add({ targets: waveText, alpha: 0, scale: 2, duration: 2000, ease: 'Linear',
+          callback: () => waveText.destroy() });
+
+        if (sfx) sfx.wave();
       }
-      // Invincibility flash (Iter 17)
-      if (time < invincibleUntil) {
-        player.setAlpha(Math.sin(time / 60) > 0 ? 0.3 : 1);
-      } else {
-        player.setAlpha(1);
+    }});
+
+    // Enemy spawning
+    this.enemySpawnRate = 1200;
+    this.time.addEvent({ delay: this.enemySpawnRate, repeat: -1, callback: () => {
+      if (!this.gameOver) this.spawnEnemy();
+    }});
+
+    // Enemy shooting timer (from wave 2+)
+    this.time.addEvent({ delay: 3000, repeat: -1, callback: () => {
+      if (!this.gameOver && this.wave >= 2) this.enemyShoot();
+    }});
+
+    // Combo decay timer
+    this.comboTimer = 0;
+    this.time.addEvent({ delay: 50, repeat: -1, callback: () => {
+      if (this.comboCount > 0 && !this.gameOver) {
+        this.comboTimer -= 50;
+        if (this.comboTimer <= 0) {
+          this.comboCount = 0;
+          this.comboTimer = 0;
+        }
+      }
+    }});
+
+    // Engine flicker animation
+    this.tweens.add({
+      targets: this.engine, alpha: 0.5, duration: 200, yoyo: true, repeat: -1, ease: 'Sine'
+    });
+  }
+
+  update() {
+    if (this.gameOver) return;
+
+    // Star parallax with layer speed
+    const t = this.time.now / 1000;
+    this.stars.forEach(s => {
+      s.y += s.speed * 1.5;
+      if (s.y > H() + 10) { s.y = -10; s.x = Phaser.Math.Between(0, W()); }
+      const flicker = Math.sin(t * s.twinkleSpeed * 3) * 0.3 + 0.7;
+      s.setAlpha(flicker);
+    });
+
+    // Nebula slow drift
+    if (this.nebula) {
+      this.nebula.x += Math.sin(t * 0.2) * 0.15;
+      this.nebula.y += Math.cos(t * 0.15) * 0.1;
+    }
+
+    // Ship movement with smooth acceleration feel
+    const speed = this.speedBoost ? 500 : 350;
+    if (this.touchLeft) {
+      this.ship.setVelocityX(-speed);
+    } else if (this.touchRight) {
+      this.ship.setVelocityX(speed);
+    } else {
+      // Smooth deceleration
+      this.ship.setVelocityX(this.ship.body.velocity.x * 0.85);
+    }
+
+    // Clamp ship position
+    const margin = 30;
+    if (this.ship.x < margin) { this.ship.x = margin; this.ship.setVelocityX(0); }
+    if (this.ship.x > W() - margin) { this.ship.x = W() - margin; this.ship.setVelocityX(0); }
+
+    // Update engine glow
+    this.engine.x = this.ship.x;
+    this.engine.y = this.ship.y + 28;
+
+    // Ship trail particles when moving
+    if (Math.abs(this.ship.body.velocity.x) > 50 && !this.gameOver) {
+      this.trailTimer += 16;
+      if (this.trailTimer > 40) {
+        const trail = this.add.sprite(
+          this.ship.x + Phaser.Math.Between(-8, 8),
+          this.ship.y + 35,
+          'trail'
+        );
+        trail.setDepth(3);
+        trail.setAlpha(0.6);
+        trail.body.allowGravity = false;
+        this.tweens.add({
+          targets: trail, alpha: 0, y: this.ship.y + 80, duration: 500, ease: 'Linear',
+          callback: () => trail.destroy()
+        });
+        this.trailTimer = 0;
       }
     }
 
-    // ================== STARFIELD ==================
-    let stars = [];
-    function createStarfield(scene) {
-      stars = [];
-      for (let i = 0; i < 80; i++) {
-        const s = scene.add.graphics();
-        s.fillStyle(0xffffff, 0.8 + Math.random() * 0.2);
-        s.fillRect(Math.random() * scene.scale.width, Math.random() * scene.scale.height, 1, 1);
-        stars.push({ g: s, speed: 0.8 + Math.random() * 1.5 });
+    // Shooting
+    if (this.touchShoot && !this.shootCooldown) {
+      this.shoot();
+      this.shootCooldown = true;
+      this.time.addEvent({ delay: 200, callback: () => { this.shootCooldown = false; }});
+    }
+
+    // Shield timer
+    if (this.shieldActive) {
+      this.shieldTimer -= 16;
+      if (this.shieldTimer <= 0) {
+        this.shieldActive = false;
+        const shieldSprite = this.ship.getChildByIndex(0);
+        if (shieldSprite) { shieldSprite.destroy(); }
+      } else {
+        // Pulse shield
+        const pulse = Math.sin(this.time.now / 200) * 0.3 + 0.7;
+        const shieldSprite = this.ship.getChildByIndex(0);
+        if (shieldSprite) {
+          shieldSprite.setAlpha(pulse);
+          shieldSprite.setScale(1 + Math.sin(this.time.now / 300) * 0.1);
+        }
       }
     }
-    function updateStarfield(scene, delta) {
-      if (!stars.length) return;
-      stars.forEach(s => {
-        s.g.y += s.speed * delta / 16;
-        if (s.g.y > scene.scale.height) s.g.y = -2;
+
+    // Speed boost timer
+    if (this.speedBoost) {
+      this.speedTimer -= 16;
+      if (this.speedTimer <= 0) this.speedBoost = false;
+    }
+
+    // Cleanup off-screen objects
+    this.bullets.children.each(b => {
+      if (b.y < -30 || b.x < -30 || b.x > W() + 30) b.destroy();
+    });
+    this.enemyBullets.children.each(b => {
+      if (b.y > H() + 30 || b.y < -30 || b.x < -30 || b.x > W() + 30) b.destroy();
+    });
+
+    // Enemy movement & patterns
+    this.enemies.children.forEach(e => {
+      if (!e.active) return;
+      const et = this.time.now / 1000;
+      const phase = e.getData('phase');
+      const pattern = e.getData('pattern') || 'straight';
+
+      switch (pattern) {
+        case 'sine':
+          e.x += Math.sin(et * 2 + phase) * (e.getData('speed') || 1.5);
+          break;
+        case 'zigzag':
+          e.x += Math.sign(Math.sin(et * 3 + phase)) * (e.getData('speed') || 2);
+          break;
+        default: // straight with slight drift
+          e.x += Math.sin(et * 1.5 + phase) * (e.getData('speed') || 1);
+          break;
+      }
+
+      // Move enemies down
+      e.y += (e.getData('fallSpeed') || 0.5) * 16;
+
+      if (e.y > H() + 80) {
+        e.destroy();
+      }
+    });
+  }
+
+  shoot() {
+    const bullet = this.bullets.get(this.ship.x, this.ship.y - 40);
+    if (bullet) {
+      bullet.setActive(true).setVisible(true);
+      bullet.setVelocityY(-600);
+      bullet.body.allowGravity = false;
+    }
+
+    // Side bullets at higher waves
+    if (this.wave >= 3 && this.comboCount >= 5) {
+      const leftBullet = this.bullets.get(this.ship.x - 12, this.ship.y - 20);
+      if (leftBullet) {
+        leftBullet.setActive(true).setVisible(true);
+        leftBullet.setVelocity(-80, -550);
+        leftBullet.body.allowGravity = false;
+      }
+      const rightBullet = this.bullets.get(this.ship.x + 12, this.ship.y - 20);
+      if (rightBullet) {
+        rightBullet.setActive(true).setVisible(true);
+        rightBullet.setVelocity(80, -550);
+        rightBullet.body.allowGravity = false;
+      }
+    }
+
+    if (sfx) sfx.shoot();
+  }
+
+  spawnEnemy() {
+    const types = ['enemyA', 'enemyB'];
+    let type = Phaser.Utils.Array.GetRandom(types);
+    let hp = 1;
+    let pattern = 'straight';
+
+    // Boss in later waves
+    if (this.wave >= 3 && Math.random() < 0.2) {
+      type = 'enemyC';
+      hp = 5;
+      pattern = 'sine';
+    } else if (this.wave >= 2 && Math.random() < 0.4) {
+      type = 'enemyB';
+      hp = 2;
+      pattern = Phaser.Utils.Array.GetRandom(['sine', 'zigzag']);
+    }
+
+    const enemy = this.enemies.get(Phaser.Math.Between(40, W() - 40), -50, type);
+    if (enemy) {
+      enemy.setActive(true).setVisible(true);
+      enemy.setData('hp', hp);
+      enemy.setData('phase', Math.random() * Math.PI * 2);
+      enemy.setData('speed', Phaser.Math.FloatBetween(1, 3));
+      enemy.setData('fallSpeed', Phaser.Math.FloatBetween(0.5, 1.5 + this.wave * 0.2));
+      enemy.setData('pattern', pattern);
+
+      // Spawn animation - scale in
+      enemy.setScale(0);
+      this.tweens.add({ targets: enemy, scale: 1, duration: 300, ease: 'Back' });
+    }
+  }
+
+  enemyShoot() {
+    const aliveEnemies = this.enemies.children.filter(e => e.active);
+    if (aliveEnemies.length === 0) return;
+
+    // Pick enemies to shoot - more in later waves
+    const numShooters = Math.min(aliveEnemies.length, this.wave >= 4 ? 3 : 2);
+    for (let i = 0; i < numShooters; i++) {
+      const shooter = Phaser.Utils.Array.GetRandom(aliveEnemies);
+      if (!shooter) continue;
+
+      const bullet = this.enemyBullets.get(shooter.x, shooter.y + 24);
+      if (bullet) {
+        bullet.setActive(true).setVisible(true);
+        bullet.setVelocityY(300 + this.wave * 30);
+        bullet.body.allowGravity = false;
+
+        // Aim toward player for accuracy in later waves
+        if (this.wave >= 5) {
+          const dx = this.ship.x - shooter.x;
+          const dy = this.ship.y - shooter.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const speed = 300 + this.wave * 30;
+          bullet.setVelocity(dx / dist * speed, dy / dist * speed);
+        }
+      }
+    }
+
+    if (sfx) sfx.hit();
+  }
+
+  hitEnemy(bullets, enemy) {
+    bullets.destroy();
+
+    const hp = enemy.getData('hp') - 1;
+    enemy.setData('hp', hp);
+
+    // Hit flash effect
+    enemy.setTint(0xffffff);
+    this.tweens.add({ targets: enemy, tint: 0xcccccc, duration: 50, callback: () => { enemy.clearTint(); }});
+
+    if (hp <= 0) {
+      // Combo tracking
+      this.comboCount++;
+      this.comboTimer = 2000;
+      const comboMultiplier = Math.min(this.comboCount, 10);
+      let points = enemy.textureKey === 'enemyC' ? 50 : enemy.textureKey === 'enemyB' ? 20 : 10;
+      this.score += points * comboMultiplier;
+
+      // Big explosion for bosses
+      if (enemy.textureKey === 'enemyC') {
+        this.createExplosion(enemy.x, enemy.y, true);
+        this.cameras.main.shake(300, 0.02);
+        if (sfx) sfx.bigExplosion();
+      } else {
+        this.createExplosion(enemy.x, enemy.y, false);
+        this.cameras.main.shake(100, 0.01);
+        if (sfx) sfx.explosion();
+      }
+
+      // Score popup text
+      const scoreText = this.add.text(enemy.x, enemy.y - 20, `+${points * comboMultiplier}`, {
+        fontSize: '20px', fontFamily: 'Courier New', color: '#ff0'
+      }).setOrigin(0.5).setDepth(8);
+      scoreText.setAlpha(1);
+      this.tweens.add({ targets: scoreText, y: enemy.y - 60, alpha: 0, duration: 1000, ease: 'Linear',
+        callback: () => scoreText.destroy() });
+
+      // Combo sound for high combos
+      if (this.comboCount >= 5 && sfx) sfx.combo();
+
+      enemy.destroy();
+
+      // Chance to drop powerup
+      if (Math.random() < 0.2) {
+        const pu = this.powerups.get(enemy.x, enemy.y);
+        if (pu) {
+          pu.setActive(true).setVisible(true);
+          pu.setData('type', Math.random() < 0.5 ? 'shield' : 'speed');
+          pu.body.setVelocityY(100);
+          pu.body.setBounceX(-1);
+          this.time.addEvent({ delay: 6000, callback: () => { if (pu.active) pu.destroy(); }});
+        }
+      }
+    } else {
+      // Hit sound for damaged enemies
+      if (sfx) sfx.hit();
+    }
+  }
+
+  hitShip(ship, enemy) {
+    if (this.shieldActive) return;
+
+    enemy.destroy();
+    this.createExplosion(ship.x, ship.y, false);
+    this.lives--;
+    this.comboCount = 0; // Reset combo on hit
+
+    // Screen shake + red flash
+    this.cameras.main.shake(300, 0.02);
+    this.cameras.main.flash(150, 255, 0, 0, 0.3);
+
+    if (sfx) sfx.hit();
+
+    if (this.lives <= 0) {
+      this.gameOver = true;
+      this.physics.pause();
+
+      // Update high score
+      if (this.score > this.highScore) {
+        localStorage.setItem('starBlasterHigh', this.score.toString());
+        this.highScore = this.score;
+      }
+
+      showGameOver(this.score, this.wave);
+      if (sfx) sfx.gameOver();
+    }
+  }
+
+  collectPowerup(ship, pu) {
+    pu.destroy();
+    const type = pu.getData('type');
+
+    // Flash green on collect
+    this.cameras.main.flash(200, 0, 255, 0);
+
+    if (type === 'shield') {
+      this.shieldActive = true;
+      this.shieldTimer = 8000;
+      const shieldSprite = this.add.sprite(ship.x, ship.y, 'shield');
+      shieldSprite.setOrigin(0.5);
+      shieldSprite.setDepth(6);
+      shieldSprite.setAlpha(0.7);
+      ship.addChild(shieldSprite);
+
+      // Auto-remove after timer
+      this.time.addEvent({ delay: 8000, callback: () => {
+        const s = ship.getChildByIndex(0);
+        if (s && s.textureKey === 'shield') { s.destroy(); }
+      }});
+    } else if (type === 'speed') {
+      this.speedBoost = true;
+      this.speedTimer = 6000;
+
+      const text = this.add.text(ship.x, ship.y - 40, '+SPEED', {
+        fontSize: '18px', fontFamily: 'Courier New', color: '#0f0'
+      }).setOrigin(0.5).setDepth(7);
+      this.tweens.add({ targets: text, y: ship.y - 80, alpha: 0, duration: 2000, ease: 'Linear',
+        callback: () => text.destroy() });
+    }
+
+    if (sfx) sfx.powerup();
+  }
+
+  createExplosion(x, y, big = false) {
+    const count = big ? 16 : 8;
+    for (let i = 0; i < count; i++) {
+      const particle = this.add.sprite(x, y, 'explosion');
+      particle.setDepth(3);
+      particle.setAlpha(1);
+      const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+      const speed = Phaser.Math.FloatBetween(big ? 150 : 80, big ? 400 : 250);
+      particle.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+      this.tweens.add({
+        targets: particle, alpha: 0, scale: big ? 3.5 : 2.5, duration: 400 + Math.random() * 200, ease: 'Linear',
+        callback: () => particle.destroy()
       });
     }
 
-    // ================== TERRAIN (Iter 3 + Iter 20 details) ==================
-    function createTerrain(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      // Iter 20: Varied ground with buildings/water
-      const ground = scene.add.graphics();
-      ground.fillStyle(0x2d5016, 1); ground.fillRect(0, h - 100, w, 100);
-      terrain.push({ obj: ground, speed: 2.2, parallax: 1 });
-      // Water patches
-      for (let i = 0; i < 3; i++) {
-        const water = scene.add.graphics();
-        water.fillStyle(0x0066aa, 0.6);
-        const wy = h - 60 - Math.random() * 30;
-        water.fillRect(Math.random() * w, wy, 80 + Math.random() * 120, 15);
-        terrain.push({ obj: water, speed: 2.0 + Math.random() * 0.5, parallax: 0.9 });
-      }
-      // Buildings
-      for (let i = 0; i < 6; i++) {
-        const bldg = scene.add.graphics();
-        const bx = Math.random() * w, by = h - 90 - Math.random() * 60;
-        const bw = 10 + Math.random() * 20, bh = 20 + Math.random() * 40;
-        bldg.fillStyle(0x334455, 1); bldg.fillRect(bx - bw/2, by - bh, bw, bh);
-        bldg.lineStyle(1, 0x556677, 0.5); bldg.strokeRect(bx - bw/2, by - bh, bw, bh);
-        // Windows
-        for (let wy = by - bh + 5; wy < by - 5; wy += 8) {
-          for (let wx = bx - bw/2 + 3; wx < bx + bw/2 - 3; wx += 6) {
-            bldg.fillStyle(Math.random() > 0.3 ? 0xffee44 : 0x334455, 0.6);
-            bldg.fillRect(wx, wy, 3, 4);
-          }
-        }
-        terrain.push({ obj: bldg, speed: 1.8 + Math.random() * 0.4, parallax: 0.8 });
-      }
-      // Bridges
-      for (let i = 0; i < 2; i++) {
-        const bridge = scene.add.graphics();
-        bridge.fillStyle(0x665544, 1);
-        const bry = h - 50 - Math.random() * 20;
-        bridge.fillRect(Math.random() * w, bry, 60, 6);
-        terrain.push({ obj: bridge, speed: 2.1, parallax: 0.95 });
-      }
-      // Mountains (parallax far)
-      for (let i = 0; i < 4; i++) {
-        const x = Math.random() * w, y = h - 130 - Math.random() * 40, size = 35 + Math.random() * 45;
-        const mtn = scene.add.graphics(); mtn.fillStyle(0x1a3309, 1);
-        mtn.beginPath(); mtn.moveTo(x - size, y + size); mtn.lineTo(x, y); mtn.lineTo(x + size, y + size);
-        mtn.closePath(); mtn.fillPath();
-        terrain.push({ obj: mtn, speed: 0.9 + Math.random() * 0.4, parallax: 0.4 });
-      }
-      // Trees
-      for (let i = 0; i < 12; i++) {
-        const x = Math.random() * w, y = h - 105 - Math.random() * 70;
-        const tree = scene.add.graphics(); tree.fillStyle(0x0d4d00, 1); tree.fillCircle(x, y, 7 + Math.random() * 5);
-        terrain.push({ obj: tree, speed: 2.0 + Math.random(), parallax: 0.9 });
-      }
-      // Road
-      const road = scene.add.graphics(); road.fillStyle(0x444444, 1); road.fillRect(w/2 - 28, 0, 56, h);
-      road.lineStyle(2, 0xffff00, 0.5); road.setLineDash([18, 18]); road.lineBetween(w/2, 0, w/2, h);
-      terrain.push({ obj: road, speed: 2.4, parallax: 1.1 });
-      createStarfield(scene);
-    }
+    // Central flash
+    const flash = this.add.sprite(x, y, 'flash');
+    flash.setDepth(4);
+    flash.setAlpha(1);
+    flash.setScale(big ? 3 : 2);
+    this.tweens.add({ targets: flash, alpha: 0, scale: big ? 5 : 3.5, duration: 200, ease: 'Linear',
+      callback: () => flash.destroy() });
+  }
+}
 
-    function updateTerrain(scene, delta) {
-      const w = scene.scale.width, h = scene.scale.height;
-      terrain.forEach(item => {
-        item.obj.y += item.speed * delta / 16;
-        if (item.obj.y > h + 60) { item.obj.y = -60; item.obj.x = Math.random() * w; }
-      });
-      updateStarfield(scene, delta);
-    }
+// --- Game Config & Init ---
+const config = {
+  type: Phaser.AUTO,
+  width: W(),
+  height: H(),
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    minWidth: 320,
+    minHeight: 480
+  },
+  physics: { default: 'arcade', arcade: { gravityY: 0 } },
+  scene: MainScene,
+  backgroundColor: '#0a0a1a'
+};
 
-    // ================== SOLVALOU (Iter 5, fixed Iter 14) ==================
-    function toggleSolvalou(scene) {
-      if (solvalou) {
-        scene.children.remove(solvalou); solvalou = null;
-      } else {
-        const w = scene.scale.width, h = scene.scale.height;
-        solvalou = scene.add.graphics();
-        solvalou.fillStyle(0x00aaff, 1);
-        solvalou.fillTriangle(player.x - 10, player.y - 60, player.x, player.y - 85, player.x + 10, player.y - 60);
-        solvalou.data = { type: 'solvalou', x: player.x, y: player.y - 70, vx: 0 };
-        scene.add.tween({ targets: solvalou, alpha: { from: 0.6, to: 1 }, duration: 80, yoyo: true, repeat: 2 });
-      }
-    }
-    function updateSolvalou(scene, delta) {
-      if (!solvalou) return;
-      const data = solvalou.data;
-      // Iter 14: Solvalou only uses a/d or left/right when solvalou is active
-      data.x += (keys['a'] ? -3.5 : keys['d'] ? 3.5 : (solvalou && keys['ArrowLeft'] ? -3.5 : keys['ArrowRight'] ? 3.5 : 0)) * delta / 16;
-      data.x = Math.max(40, Math.min(scene.scale.width - 40, data.x));
-      solvalou.x = data.x; solvalou.y = data.y;
-      if (Math.random() < 0.04) {
-        const b = scene.add.graphics(); b.fillStyle(0x00ffff, 1); b.fillCircle(data.x, data.y - 8, 2);
-        b.data = { type: 'solvalouBullet', speed: 9 }; bullets.push(b);
-      }
-      if (data.y < 40) { scene.children.remove(solvalou); solvalou = null; }
-    }
+let game;
 
-    // ================== ENEMIES (Iter 7+8) ==================
-    function spawnEnemy(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      const typeRoll = Math.random();
-      let type;
-      if (typeRoll < 0.2) type = 'fighter';
-      else if (typeRoll < 0.45) type = 'bomber';
-      else if (typeRoll < 0.6) type = 'scout';
-      else if (typeRoll < 0.75) type = 'armored';
-      else type = 'boss';
-      const px = w / 2 + (Math.random() - 0.5) * (w * 0.65), py = -35;
-      const enemy = scene.add.graphics();
-      let data = { type: 'enemy', health: 1, speed: 2.1, shootChance: 0.0012, points: 100, vx: 0 };
-      if (type === 'fighter') {
-        enemy.fillStyle(0xcc0000, 1); enemy.lineStyle(2, 0xff3333, 1);
-        enemy.fillTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
-        enemy.strokeTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
-        data.health = 1; data.speed = 3.4; data.shootChance = 0.003; data.points = 70; data.vx = (Math.random() - 0.5) * 1.8;
-      } else if (type === 'bomber') {
-        enemy.fillStyle(0xdd8800, 1); enemy.lineStyle(2, 0xffaa33, 1);
-        enemy.fillRect(px - 16, py - 10, 32, 22); enemy.strokeRect(px - 16, py - 10, 32, 22);
-        enemy.fillStyle(0x662200, 1); enemy.fillRect(px - 8, py - 4, 6, 8); enemy.fillRect(px + 2, py - 4, 6, 8);
-        data.health = 2; data.speed = 1.7; data.shootChance = 0.007; data.points = 170;
-      } else if (type === 'scout') {
-        enemy.fillStyle(0x8800ff, 1); enemy.lineStyle(2, 0xaa33ff, 1);
-        enemy.fillCircle(px, py, 8); enemy.strokeCircle(px, py, 8);
-        data.health = 1; data.speed = 5.2; data.shootChance = 0.002; data.points = 90; data.vx = (Math.random() - 0.5) * 3;
-      } else if (type === 'armored') {
-        enemy.fillStyle(0x444444, 1); enemy.lineStyle(3, 0x888888, 1);
-        enemy.fillCircle(px, py, 16); enemy.strokeCircle(px, py, 16);
-        data.health = 5; data.speed = 1.2; data.shootChance = 0.005; data.points = 250;
-      } else if (type === 'boss') {
-        enemy.fillStyle(0x440000, 1); enemy.lineStyle(4, 0xff2222, 1);
-        enemy.fillRect(px - 28, py - 18, 56, 38); enemy.strokeRect(px - 28, py - 18, 56, 38);
-        enemy.fillStyle(0xffff00, 0.9); enemy.fillCircle(px, py, 10); enemy.strokeCircle(px, py, 10);
-        // Weak points on sides
-        enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px - 22, py - 10, 5); enemy.strokeCircle(px - 22, py - 10, 5);
-        enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px + 22, py - 10, 5); enemy.strokeCircle(px + 22, py - 10, 5);
-        data.health = 14; data.speed = 0.6; data.shootChance = 0.014; data.points = 1400;
-        data.sideWeakPoints = [{x: px - 22, y: py - 10}, {x: px + 22, y: py - 10}];
-        bossActive = true;
-      }
-      enemy.setData('type', type); enemy.setData('health', data.health); enemy.data = data; enemies.push(enemy);
-    }
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  if (game) game.destroy(true);
+  game = new Phaser.Game(config);
+}
 
-    function spawnGroundEnemy(scene) {
-      const w = scene.scale.width, h = scene.scale.height;
-      const type = Math.random() < 0.5 ? 'infantry' : Math.random() < 0.7 ? 'tank' : 'launcher';
-      const ge = scene.add.graphics();
-      let data = { type: 'ground', gtype: type, health: 1, speed: 1.8, points: 80, marked: false, markTimer: 0 };
-      if (type === 'infantry') {
-        ge.fillStyle(0x663300, 1); ge.fillRect(0, 0, 8, 12); ge.fillCircle(4, 3, 3);
-        data.health = 1; data.speed = 2.4; data.points = 50;
-      } else if (type === 'tank') {
-        ge.fillStyle(0x555555, 1); ge.fillRect(0, 0, 22, 14); ge.fillStyle(0x333333, 1); ge.fillRect(4, 3, 14, 8);
-        data.health = 3; data.speed = 1.3; data.points = 140;
-      } else {
-        ge.fillStyle(0x444444, 1); ge.fillRect(0, 0, 16, 10); ge.fillStyle(0xffaa00, 1); ge.fillRect(6, -4, 4, 5);
-        data.health = 2; data.speed = 1.1; data.points = 110;
-      }
-      ge.x = Math.random() * (w - 60) + 30; ge.y = h - 92;
-      ge.data = data; groundEnemies.push(ge);
-    }
-
-    function markGroundEnemies(scene) {
-      // Iter 15: Mark ground enemies under scav scanner
-      const sx = player.x, sy = scene.scale.height - 90;
-      groundEnemies.forEach(ge => {
-        if (Math.abs(ge.x - sx) < 50 && Math.abs(ge.y - sy) < 30) {
-          ge.data.marked = true;
-          ge.data.markTimer = 3000; // 3 seconds to bomb marked
-        }
-      });
-    }
-
-    function updateGroundEnemies(scene, delta) {
-      for (let i = groundEnemies.length - 1; i >= 0; i--) {
-        const ge = groundEnemies[i];
-        ge.x += (Math.random() - 0.5) * 0.6 * delta / 16;
-        // Mark timer
-        if (ge.data.marked) {
-          ge.data.markTimer -= delta;
-          // Draw mark indicator
-          const markG = scene.add.graphics();
-          markG.lineStyle(1, 0xff00ff, 0.8);
-          markG.strokeCircle(ge.x + 8, ge.y - 5, 12);
-          setTimeout(() => scene.children.remove(markG), 100);
-          if (ge.data.markTimer <= 0) ge.data.marked = false;
-        }
-        if (Math.random() < 0.006 && ge.data.gtype === 'launcher') {
-          const mb = scene.add.graphics(); mb.fillStyle(0xff4400, 1); mb.fillCircle(ge.x + 8, ge.y - 6, 3);
-          mb.data = { type: 'missile', speed: 2.8, targetX: player.x }; enemyBullets.push(mb);
-          missileWarnings.push({ time: 1200, x: ge.x });
-        }
-        if (ge.x < 20 || ge.x > scene.scale.width - 20) ge.data.speed *= -1;
-        if (Math.random() < 0.0008) { scene.children.remove(ge); groundEnemies.splice(i, 1); }
-      }
-      // Periodically spawn ground enemies (Iter 7)
-      if (Math.random() < 0.002 * difficulty) spawnGroundEnemy(scene);
-    }
-
-    function updateEnemies(scene, delta) {
-      for (let i = enemies.length - 1; i >= 0; i--) {
-        const enemy = enemies[i], data = enemy.data;
-        enemy.y += data.speed * delta / 16;
-        if (data.type === 'fighter') {
-          data.vx = (data.vx || 0) * 0.96 + Math.sin(scene.time.now / 380 + i) * 0.8;
-          enemy.x += data.vx * delta / 16;
-        }
-        if (data.type === 'bomber' && Math.random() < data.shootChance * delta / 16 * 1.3) {
-          const leadX = player.x + (player.x - enemy.x) * 0.3;
-          const b = scene.add.graphics(); b.fillStyle(0xff0000, 1); b.fillCircle(enemy.x, enemy.y + 12, 3);
-          b.data = { type: 'enemyBullet', speed: 3.8, vx: (leadX - enemy.x) * 0.025 }; enemyBullets.push(b);
-        } else if (Math.random() < data.shootChance * delta / 16) {
-          enemyShoot(scene, enemy);
-        }
-        if (enemy.y > scene.scale.height + 50) {
-          scene.children.remove(enemy); enemies.splice(i, 1); if (data.type === 'boss') bossActive = false;
-        }
-      }
-    }
-
-    function enemyShoot(scene, enemy) {
-      const bullet = scene.add.graphics();
-      bullet.fillStyle(0xff0000, 1); bullet.fillCircle(enemy.x, enemy.y, 3);
-      bullet.data = { type: 'enemyBullet', speed: 4, vx: 0 }; enemyBullets.push(bullet);
-    }
-
-    function updateEnemyBullets(scene, delta) {
-      for (let i = enemyBullets.length - 1; i >= 0; i--) {
-        const b = enemyBullets[i];
-        b.y += b.data.speed * delta / 16;
-        if (b.data.vx) b.x += b.data.vx * delta / 16;
-        if (b.y > scene.scale.height + 20) { scene.children.remove(b); enemyBullets.splice(i, 1); }
-      }
-    }
-
-    // ================== BULLETS (Iter 6 + Iter 18 trails) ==================
-    function shootBullet(scene) {
-      const bullet = scene.add.graphics();
-      bullet.fillStyle(0x00ff00, 1); bullet.fillCircle(player.x, player.y - 30, 3);
-      bullet.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
-      bullets.push(bullet); AudioSystem.playShoot();
-      
-      // Iter 23: Weapon upgrade system
-      if (weaponLevel >= 2) {
-        const b2 = scene.add.graphics(); b2.fillStyle(0x00ff00, 1); b2.fillCircle(player.x - 12, player.y - 25, 2.5);
-        b2.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
-        bullets.push(b2);
-        const b3 = scene.add.graphics(); b3.fillStyle(0x00ff00, 1); b3.fillCircle(player.x + 12, player.y - 25, 2.5);
-        b3.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
-        bullets.push(b3);
-      }
-      if (weaponLevel >= 3) {
-        const b4 = scene.add.graphics(); b4.fillStyle(0x00ff00, 1); b4.fillCircle(player.x - 20, player.y - 20, 2);
-        b4.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: -0.5 };
-        bullets.push(b4);
-        const b5 = scene.add.graphics(); b5.fillStyle(0x00ff00, 1); b5.fillCircle(player.x + 20, player.y - 20, 2);
-        b5.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: 0.5 };
-        bullets.push(b5);
-      }
-    }
-
-    function dropBomb(scene) {
-      const bomb = scene.add.graphics();
-      bomb.fillStyle(0xffff00, 1); bomb.fillCircle(player.x, player.y + 18, 5);
-      bomb.data = { type: 'bomb', speed: 3.2, vx: (Math.random() - 0.5) * 0.6, trail: true, trailColor: 0xffff00 };
-      bullets.push(bomb); AudioSystem.playBomb();
-    }
-
-    function updateBullets(scene, delta) {
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        const bullet = bullets[i];
-        bullet.y -= bullet.data.speed * delta / 16;
-        if (bullet.data.vx) bullet.x += bullet.data.vx * delta / 16;
-        // Iter 18: Trail effect
-        if (bullet.data.trail && Math.random() < 0.5) {
-          const trail = scene.add.graphics();
-          trail.fillStyle(bullet.data.trailColor || 0x88ff88, 0.4);
-          trail.fillCircle(bullet.x + (Math.random() - 0.5) * 4, bullet.y + bullet.data.speed * delta / 16 * 0.5 + (Math.random() - 0.5) * 2, 2);
-          particles.push({ x: trail.x, y: trail.y, vx: 0, vy: 0, life: 8, color: bullet.data.trailColor, size: 2, setData: function(){} });
-        }
-        if (bullet.y < -20) { scene.children.remove(bullet); bullets.splice(i, 1); }
-      }
-    }
-
-    // ================== PARTICLES (Iter 9) ==================
-    function createExplosion(scene, x, y, color = 0xffaa00) {
-      for (let i = 0; i < 14; i++) {
-        const p = scene.add.graphics();
-        p.fillStyle(color, 0.9); p.fillCircle(x, y, 2 + Math.random() * 3);
-        p.data = { vx: (Math.random() - 0.5) * 4.5, vy: (Math.random() - 0.5) * 4.5 - 1, life: 18 + Math.random() * 14 };
-        particles.push(p);
-      }
-      shakeTime = 220; flashTime = 90;
-    }
-
-    function updateParticles(scene, delta) {
-      for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
-        if (p.setData) {
-          // Real Phaser graphics particle
-          p.x += p.data.vx * delta / 16; p.y += p.data.vy * delta / 16;
-          p.data.life -= delta / 16; p.setAlpha(Math.max(0.1, p.data.life / 22));
-          if (p.data.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
-        } else {
-          // Trail particle (simple)
-          p.x += p.vx * delta / 16; p.y += p.vy * delta / 16;
-          p.life -= delta / 16;
-          if (p.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
-        }
-      }
-    }
-
-    // ================== SCORE POPUPS (Iter 19) ==================
-    function addScorePopup(scene, x, y, points) {
-      const popup = scene.add.text(x, y, `+${points}`, {
-        fontSize: '16px', fontFamily: 'Arial', color: '#ffff00', stroke: '#000000', strokeThickness: 2
-      });
-      popup.setOrigin(0.5); popup.setDepth(65);
-      popup.setData('vy', -1.5);
-      popup.setData('life', 1200);
-      scorePopups.push(popup);
-    }
-
-    function updateScorePopups(scene, delta) {
-      for (let i = scorePopups.length - 1; i >= 0; i--) {
-        const p = scorePopups[i];
-        p.y += p.data.vy * delta / 16;
-        p.setData('life', p.data.life - delta);
-        const alpha = Math.max(0, p.data.life / 1200);
-        p.setAlpha(alpha);
-        if (p.data.life <= 0) {
-          scene.children.remove(p);
-          scorePopups.splice(i, 1);
-        }
-      }
-    }
-
-    // ================== FUEL + SPAWN ==================
-    function spawnFuel(scene) {
-      const f = scene.add.graphics(); f.fillStyle(0x00ffff, 0.6); f.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 9);
-      f.data = { type: 'fuel' }; fuelPickups.push(f);
-    }
-    
-    // Iter 24: Power-up spawning
-    function spawnPowerup(scene) {
-      const types = ['weapon', 'life', 'shield'];
-      const type = types[Math.floor(Math.random() * types.length)];
-      const p = scene.add.graphics();
-      if (type === 'weapon') {
-        p.fillStyle(0x00ff00, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0x00ff00, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-      } else if (type === 'life') {
-        p.fillStyle(0xff00ff, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0xff00ff, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-      } else {
-        p.fillStyle(0x0088ff, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0x0088ff, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-      }
-      p.data = { type: 'powerup', powerupType: type };
-      powerups.push(p);
-    }
-    
-    function updatePowerups(scene, delta) {
-      for (let i = powerups.length - 1; i >= 0; i--) {
-        const p = powerups[i];
-        p.y += 2.1 * delta / 16;
-        if (p.y > scene.scale.height + 20) { scene.children.remove(p); powerups.splice(i, 1); continue; }
-        // Collect power-up
-        if (Math.abs(p.x - player.x) < 24 && Math.abs(p.y - player.y) < 24) {
-          if (p.data.powerupType === 'weapon') {
-            weaponLevel = Math.min(3, weaponLevel + 1);
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, 'WEAPON UP!');
-          } else if (p.data.powerupType === 'life') {
-            lives++;
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, '+1 LIFE!');
-          } else if (p.data.powerupType === 'shield') {
-            shieldActive = true;
-            shieldTimer = 8000; // 8 seconds
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, 'SHIELD!');
-          }
-          scene.children.remove(p);
-          powerups.splice(i, 1);
-        }
-      }
-    }
-
-    // ================== COLLISIONS + WARNINGS ==================
-    function checkCollisions(scene) {
-      // Bullets vs enemies
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        const bullet = bullets[i];
-        for (let j = enemies.length - 1; j >= 0; j--) {
-          const enemy = enemies[j];
-          if (Math.abs(bullet.x - enemy.x) < 26 && Math.abs(bullet.y - enemy.y) < 26) {
-            enemy.data.health--; scene.children.remove(bullet); bullets.splice(i, 1);
-            if (enemy.data.health <= 0) {
-              score += enemy.data.points; AudioSystem.playExplosion();
-              createExplosion(scene, enemy.x, enemy.y);
-              addScorePopup(scene, enemy.x, enemy.y, enemy.data.points);
-              scene.children.remove(enemy); enemies.splice(j, 1);
-              comboCount++; comboTimer = 2200;
-              if (enemy.data.type === 'boss') bossActive = false;
-              // Iter 24: Drop power-up chance
-              if (Math.random() < 0.15) spawnPowerup(scene);
-            }
-            break;
-          }
-          // Iter 28: Shield blocks enemy bullets
-          if (enemy.data.type === 'boss' && Math.abs(bullet.x - enemy.x) < 30 && Math.abs(bullet.y - enemy.y) < 30) {
-            if (shieldActive) {
-              scene.children.remove(bullet); bullets.splice(i, 1);
-              createExplosion(scene, bullet.x, bullet.y, 0x0088ff);
-              AudioSystem.playHit();
-              break;
-            }
-          }
-        }
-      }
-      // Iter 15: Scav marks + double damage on bombs
-      for (let i = groundEnemies.length - 1; i >= 0; i--) {
-        const ge = groundEnemies[i];
-        for (let k = bullets.length - 1; k >= 0; k--) {
-          const b = bullets[k];
-          if (b.data.type === 'bomb' && Math.abs(b.x - ge.x) < 18 && Math.abs(b.y - ge.y) < 18) {
-            ge.data.health--;
-            if (ge.data.marked) { ge.data.health--; } // double damage when marked
-            scene.children.remove(b); bullets.splice(k, 1);
-            if (ge.data.health <= 0) {
-              score += ge.data.points; AudioSystem.playExplosion();
-              createExplosion(scene, ge.x, ge.y, 0x886633);
-              addScorePopup(scene, ge.x, ge.y, ge.data.points);
-              scene.children.remove(ge); groundEnemies.splice(i, 1);
-              comboCount++; comboTimer = 2000;
-            }
-            break;
-          }
-        }
-      }
-      // Iter 28: Shield blocks enemy bullets
-      for (let i = enemyBullets.length - 1; i >= 0; i--) {
-        const bullet = enemyBullets[i];
-        if (shieldActive && Math.abs(bullet.x - player.x) < 30 && Math.abs(bullet.y - player.y) < 30) {
-          AudioSystem.playHit();
-          createExplosion(scene, bullet.x, bullet.y, 0x0088ff);
-          scene.children.remove(bullet); enemyBullets.splice(i, 1);
-          continue;
-        }
-        const time = game.time.now;
-        if (time < invincibleUntil) continue; // Iter 17: invincibility
-        if (Math.abs(bullet.x - player.x) < 20 && Math.abs(bullet.y - player.y) < 26) {
-          AudioSystem.playHit(); scene.children.remove(bullet); enemyBullets.splice(i, 1); loseLife(scene); break;
-        }
-      }
-      // Player collisions
-      for (let i = enemies.length - 1; i >= 0; i--) {
-        const enemy = enemies[i];
-        const time = game.time.now;
-        if (time < invincibleUntil) continue;
-        if (Math.abs(enemy.x - player.x) < 26 && Math.abs(enemy.y - player.y) < 32) {
-          if (shieldActive) {
-            createExplosion(scene, enemy.x, enemy.y);
-            scene.children.remove(enemy); enemies.splice(i, 1);
-            shieldActive = false;
-            continue;
-          }
-          AudioSystem.playExplosion(); createExplosion(scene, enemy.x, enemy.y);
-          scene.children.remove(enemy); enemies.splice(i, 1); loseLife(scene); shakeTime = 340;
-        }
-      }
-      // Fuel vs player
-      for (let i = fuelPickups.length - 1; i >= 0; i--) {
-        const f = fuelPickups[i];
-        if (Math.abs(f.x - player.x) < 24 && Math.abs(f.y - player.y) < 24) {
-          fuel = Math.min(100, fuel + 32); AudioSystem.playFuelPickup();
-          scene.children.remove(f); fuelPickups.splice(i, 1); break;
-        }
-      }
-    }
-
-    function loseLife(scene) {
-      lives--;
-      invincibleUntil = game.time.now + 1500; // Iter 17: 1.5s invincibility
-      shakeTime = 520; flashTime = 340;
-      if (lives <= 0) gameOver(scene);
-    }
-
-    function updateMissileWarnings(scene) {
-      if (!scene.warningText) return;
-      if (missileWarnings.length > 0) {
-        missileWarnings = missileWarnings.filter(m => { m.time -= 16; return m.time > 0; });
-        scene.warningText.setText('!!! MISSILE INCOMING !!!');
-        scene.warningText.setAlpha(Math.sin(Date.now() / 80) * 0.5 + 0.6);
-      } else {
-        scene.warningText.setAlpha(0);
-      }
-    }
-
-    // ================== GAME OVER ==================
-    function gameOver(scene) {
-      gameActive = false; isPaused = false;
-      AudioSystem.stopMusic();
-      if (score > highScore) { highScore = score; localStorage.setItem('starBlasterHigh', highScore.toString()); }
-      const w = scene.scale.width, h = scene.scale.height;
-      const overlay = scene.add.graphics(); overlay.fillStyle(0x000000, 0.82); overlay.fillRect(0, 0, w, h);
-      const goText = scene.add.text(w/2, h/2 - 90, 'GAME OVER', {
-        fontSize: '52px', fontFamily: 'Arial', color: '#ff0000', stroke: '#000000', strokeThickness: 7
-      }); goText.setOrigin(0.5); goText.setDepth(100);
-      const scoreText = scene.add.text(w/2, h/2 - 10, `SCORE: ${score}`, {
-        fontSize: '26px', fontFamily: 'Arial', color: '#00ff00'
-      }); scoreText.setOrigin(0.5); scoreText.setDepth(100);
-      const highText = scene.add.text(w/2, h/2 + 35, `HIGH SCORE: ${highScore}`, {
-        fontSize: '20px', fontFamily: 'Arial', color: '#ffff00'
-      }); highText.setOrigin(0.5); highText.setDepth(100);
-      const restartText = scene.add.text(w/2, h/2 + 95, 'TAP TO RESTART', {
-        fontSize: '20px', fontFamily: 'Arial', color: '#00ffff', stroke: '#000000', strokeThickness: 3
-      }); restartText.setOrigin(0.5); restartText.setDepth(100);
-      restartText.setInteractive({ useHandCursor: true });
-      restartText.on('pointerdown', () => {
-        scene.children.removeAll(); scene.input.removeAllListeners();
-        addTouchControls(scene); showTitleScreen(scene);
-      });
-    }
-
-    // Boot game
+function showGameOver(score, wave) {
+  const overlay = document.getElementById('overlay');
+  overlay.style.display = 'flex';
+  const highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
+  const isNew = score >= highScore && score > 0;
+  overlay.innerHTML = `
+    <h1>GAME OVER</h1>
+    <div class="score-display">SCORE: ${score}</div>
+    ${isNew ? '<p style="color:#ff0;font-size:20px;text-shadow:0 0 15px #ff0;">★ NEW HIGH SCORE ★</p>' : ''}
+    <div class="high-score">HIGH SCORE: ${Math.max(score, highScore)}</div>
+    <p>Wave reached: ${wave}</p>
+    <button id="restartBtn">PLAY AGAIN</button>
+  `;
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    overlay.style.display = 'none';
+    if (game) game.destroy(true);
     game = new Phaser.Game(config);
-  </script>
+  });
+}
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  // Initialize audio context on user gesture
+  try { sfx = new SoundFX(); } catch(e) { sfx = null; }
+  startGame();
+});
+</script>
 </body>
 </html>
