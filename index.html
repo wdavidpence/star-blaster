@@ -1,45 +1,6 @@
 <!-- CHANGELOG
-Iteration 1: Added scrolling starfield background that scrolls continuously during gameplay
-Iteration 2: Added keyboard controls (Arrow keys + Space) in addition to touch
-Iteration 3: Fixed terrain - proper parallax scrolling layers (mountains slower than ground)
-Iteration 4: Added Scav ground scanner (Down key extends scanner, marks ground units)
-Iteration 5: Added Solvalou air unit (S key splits air unit with own zapper)
-Iteration 6: Fixed Blaster bombs to dive DOWN from player position
-Iteration 7: Added ground war enemies (infantry running, tanks, missile launchers)
-Iteration 8: Improved enemy behaviors - fighters weave/swoop, bombers lead shots, bosses multiple weak points
-Iteration 9: Added particle explosions and screen shake effects
-Iteration 10: Added combo system visual feedback
-Iteration 11: Added missile warnings (flashing text on incoming missiles)
-Iteration 12: Added high score display (current + high score on game over + HUD)
-Iteration 13: Fixed Scav scanner object leak (persistent graphics object)
-Iteration 14: Fixed Solvalou/player input conflict - arrows control only Solvalou when active
-Iteration 15: Added Scav marking mechanic - marked ground enemies take double damage from bombs
-Iteration 16: Added difficulty curve with wave announcements (WAVE 1, WAVE 2, etc.)
-Iteration 17: Added invincibility frames (1.5s) after losing a life
-Iteration 18: Added bullet trail effects (green for zapper, yellow for bombs)
-Iteration 19: Added score popups that float up and fade on kills
-Iteration 20: Added ground terrain details (buildings, water, bridges)
-Iteration 21: Added pause functionality (P or Escape)
-Iteration 22: Added background music loop and improved title screen
-Iteration 23: Added weapon upgrade system (single → double → triple shot)
-Iteration 24: Added power-up drops (weapon upgrade, extra life, shield)
-Iteration 25: Added shield power-up with visual effect
-Iteration 26: Added enemy variety (fast scouts, armored enemies)
-Iteration 27: Added boss phase transitions (changes attack pattern at 50% HP)
-Iteration 28: Added screen flash on boss damage
-Iteration 29: Improved particle effects for different enemy types
-Iteration 30: Improved difficulty scaling with enemy spawn rates
-Iteration 31: Added boss multi-phase attack patterns (changes at 75%, 50%, 25% HP)
-Iteration 32: Added boss weak point targeting system
-Iteration 33: Added screen flash on boss damage
-Iteration 34: Improved particle effects for different enemy types
-Iteration 35: Added combo multiplier system (consecutive kills increase score)
-Iteration 36: Added wave announcements with difficulty scaling
-Iteration 37: Added invincibility frames after death (1.5s)
-Iteration 38: Added bullet trail effects
-Iteration 39: Added score popups on kills
-Iteration 40: Added ground terrain details with buildings and water
-Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, memory leaks
+v4.7: Complete rewrite — fix scene lifecycle, proper Phaser positioning, canvas textures,
+      all keyboard/touch controls survive restart, proper parallax terrain, improved visuals
 -->>
 <!DOCTYPE html>
 <html lang="en">
@@ -58,7 +19,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
   <script>
     // ================== AUDIO SYSTEM ==================
     const AudioSystem = {
-      ctx: null, masterGain: null, musicGain: null, musicOsc: null, musicNote: 0,
+      ctx: null, masterGain: null, musicGain: null,
       musicInterval: null,
       init() {
         if (this.ctx) return;
@@ -73,18 +34,15 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         } catch (e) { console.error('Audio init failed:', e); }
       },
       resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
-      // Simple arpeggio loop - low hum
       startMusic() {
         if (this.musicInterval) return;
         const notes = [110, 146.8, 164.8, 146.8, 130.8, 110, 98, 110];
         let idx = 0;
         this.musicInterval = setInterval(() => {
           if (!this.ctx || this.ctx.state !== 'running') return;
-          const osc = this.ctx.createOscillator();
-          const g = this.ctx.createGain();
+          const osc = this.ctx.createOscillator(), g = this.ctx.createGain();
           osc.connect(g); g.connect(this.musicGain);
-          osc.type = 'sine';
-          osc.frequency.value = notes[idx];
+          osc.type = 'sine'; osc.frequency.value = notes[idx];
           g.gain.setValueAtTime(0.3, this.ctx.currentTime);
           g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
           osc.start(); osc.stop(this.ctx.currentTime + 0.5);
@@ -92,99 +50,149 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         }, 500);
       },
       stopMusic() { if (this.musicInterval) { clearInterval(this.musicInterval); this.musicInterval = null; } },
-      playShoot() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(880, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(440, this.ctx.currentTime + 0.1);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.1);
-      },
-      playBomb() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(180, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(80, this.ctx.currentTime + 0.2);
-        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.2);
-      },
-      playExplosion() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(120, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.3);
-        gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.3);
-      },
-      playHit() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(220, this.ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.15);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.15);
-      },
-      playBossAlert() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'square'; osc.frequency.setValueAtTime(55, this.ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(65, this.ctx.currentTime + 1);
-        gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 1);
-        osc.start(); osc.stop(this.ctx.currentTime + 1);
-      },
-      playFuelPickup() {
-        if (!this.ctx) return;
-        const osc = this.ctx.createOscillator(), gain = this.ctx.createGain();
-        osc.connect(gain); gain.connect(this.masterGain);
-        osc.type = 'sine'; osc.frequency.setValueAtTime(440, this.ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(880, this.ctx.currentTime + 0.2);
-        gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.2);
-        osc.start(); osc.stop(this.ctx.currentTime + 0.2);
-      },
-      playWaveAnnounce() {
-        if (!this.ctx) return;
-        for (let i = 0; i < 3; i++) {
-          const osc = this.ctx.createOscillator(), g = this.ctx.createGain();
-          osc.connect(g); g.connect(this.masterGain);
-          osc.type = 'triangle';
-          const t = this.ctx.currentTime + i * 0.15;
-          osc.frequency.setValueAtTime(440 + i * 100, t);
-          g.gain.setValueAtTime(0.3, t);
-          g.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
-          osc.start(t); osc.stop(t + 0.2);
-        }
-      }
+      playShoot() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='square';o.frequency.setValueAtTime(880,this.ctx.currentTime);o.frequency.exponentialRampToValueAtTime(440,this.ctx.currentTime+0.1);g.gain.setValueAtTime(0.3,this.ctx.currentTime);g.gain.exponentialRampToValueAtTime(0.01,this.ctx.currentTime+0.1);o.start();o.stop(this.ctx.currentTime+0.1); },
+      playBomb() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='sawtooth';o.frequency.setValueAtTime(180,this.ctx.currentTime);o.frequency.exponentialRampToValueAtTime(80,this.ctx.currentTime+0.2);g.gain.setValueAtTime(0.4,this.ctx.currentTime);g.gain.exponentialRampToValueAtTime(0.01,this.ctx.currentTime+0.2);o.start();o.stop(this.ctx.currentTime+0.2); },
+      playExplosion() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='square';o.frequency.setValueAtTime(120,this.ctx.currentTime);o.frequency.exponentialRampToValueAtTime(40,this.ctx.currentTime+0.3);g.gain.setValueAtTime(0.5,this.ctx.currentTime);g.gain.exponentialRampToValueAtTime(0.01,this.ctx.currentTime+0.3);o.start();o.stop(this.ctx.currentTime+0.3); },
+      playHit() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='sawtooth';o.frequency.setValueAtTime(220,this.ctx.currentTime);o.frequency.exponentialRampToValueAtTime(110,this.ctx.currentTime+0.15);g.gain.setValueAtTime(0.3,this.ctx.currentTime);g.gain.exponentialRampToValueAtTime(0.01,this.ctx.currentTime+0.15);o.start();o.stop(this.ctx.currentTime+0.15); },
+      playBossAlert() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='square';o.frequency.setValueAtTime(55,this.ctx.currentTime);o.frequency.linearRampToValueAtTime(65,this.ctx.currentTime+1);g.gain.setValueAtTime(0.4,this.ctx.currentTime);g.gain.linearRampToValueAtTime(0,this.ctx.currentTime+1);o.start();o.stop(this.ctx.currentTime+1); },
+      playFuelPickup() { if (!this.ctx) return; const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='sine';o.frequency.setValueAtTime(440,this.ctx.currentTime);o.frequency.linearRampToValueAtTime(880,this.ctx.currentTime+0.2);g.gain.setValueAtTime(0.3,this.ctx.currentTime);g.gain.linearRampToValueAtTime(0,this.ctx.currentTime+0.2);o.start();o.stop(this.ctx.currentTime+0.2); },
+      playWaveAnnounce() { if (!this.ctx) return; for(let i=0;i<3;i++){const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.connect(g);g.connect(this.masterGain);o.type='triangle';const t=this.ctx.currentTime+i*0.15;o.frequency.setValueAtTime(440+i*100,t);g.gain.setValueAtTime(0.3,t);g.gain.exponentialRampToValueAtTime(0.01,t+0.2);o.start(t);o.stop(t+0.2);} }
     };
 
-    // ================== GAME STATE ==================
-    let game, player, bullets = [], enemies = [], enemyBullets = [], fuelPickups = [], powerups = [], terrain = [], particles = [];
-    let score = 0, fuel = 100, lives = 3, gameActive = false, bossActive = false;
-    let comboCount = 0, comboTimer = 0, difficulty = 1, distance = 0, highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
-    let lastShootTime = 0, lastBombTime = 0, lastBossSpawn = 0, lastFuelSpawn = 0, lastEnemySpawn = 0, lastPowerupSpawn = 0;
-    let shakeTime = 0, flashTime = 0;
-    let touchLeft = false, touchRight = false, touchShoot = false, touchBomb = false;
-    let keys = {};
-    let scavActive = false, solvalou = null, groundEnemies = [], missileWarnings = [];
-    let scavGraphics = null;
-    let invincibleUntil = 0;
-    let isPaused = false;
-    let waveNum = 0, lastWaveTime = 0, waveAnnounceTimer = 0;
-    let scorePopups = [];
-    let titleStarAnim = [];
-    let weaponLevel = 1, shieldActive = false, shieldTimer = 0;
-    let markGraphics = []; // Reusable mark indicators
+    // ================== GLOBAL STATE ==================
+    let game, player, bullets=[], enemies=[], enemyBullets=[], fuelPickups=[], powerups=[], terrain=[], particles=[];
+    let score=0, fuel=100, lives=3, gameActive=false, bossActive=false;
+    let comboCount=0, comboTimer=0, difficulty=1, distance=0, highScore=parseInt(localStorage.getItem('starBlasterHigh')||'0');
+    let lastShootTime=0, lastBombTime=0, lastBossSpawn=0, lastFuelSpawn=0, lastEnemySpawn=0, lastPowerupSpawn=0;
+    let shakeTime=0, flashTime=0;
+    let touchLeft=false, touchRight=false, touchShoot=false, touchBomb=false;
+    let keys={};
+    let scavActive=false, solvalou=null, groundEnemies=[], missileWarnings=[];
+    let scavGraphics=null;
+    let invincibleUntil=0, isPaused=false;
+    let waveNum=0, lastWaveTime=0, waveAnnounceTimer=0;
+    let scorePopups=[];
+    let titleStarAnim=[];
+    let weaponLevel=1, shieldActive=false, shieldTimer=0;
+    let markGraphics=[];
+    let gameScene = null;
 
+    // ================== SPRITE TEXTURE GENERATION ==================
+    function generateTextures(scene) {
+      const g = scene.make.graphics({x:0, y:0, add:false});
+
+      // Player ship
+      g.clear(); g.fillStyle(0x334455,1); g.fillRect(-10,-28,20,50);
+      g.fillStyle(0x556677,1); g.fillRect(-10,-28,20,10);
+      g.fillStyle(0x223344,1); g.fillRect(-14,-8,28,18);
+      g.fillStyle(0x445566,1); g.fillRect(-6,-30,12,8);
+      g.fillStyle(0x00ff88,0.8); g.fillCircle(0,-18,4);
+      g.fillStyle(0xff6600,0.9); g.fillRect(-6,20,4,8); g.fillRect(2,20,4,8);
+      g.generateTexture('playerShip', 40, 56);
+
+      // Solvalou
+      g.clear(); g.fillStyle(0x0088cc,1); g.fillTriangle(-12,-28,0,-48,12,-28);
+      g.fillStyle(0x00aaff,1); g.fillRect(-4,-30,8,20);
+      g.fillStyle(0x00ffff,0.8); g.fillCircle(0,-35,3);
+      g.fillStyle(0xff4400,0.7); g.fillRect(-5,14,3,6); g.fillRect(2,14,3,6);
+      g.generateTexture('solvalouShip', 28, 56);
+
+      // Fighter enemy
+      g.clear(); g.fillStyle(0xcc0000,1); g.fillTriangle(-14,12,0,-14,14,12);
+      g.fillStyle(0xff3333,1); g.fillRect(-3,-14,6,10);
+      g.fillStyle(0xff6600,0.8); g.fillRect(-4,10,3,5); g.fillRect(1,10,3,5);
+      g.generateTexture('fighter', 30, 30);
+
+      // Bomber enemy
+      g.clear(); g.fillStyle(0xdd8800,1); g.fillRect(-16,-10,32,22);
+      g.fillStyle(0xffaa33,1); g.fillRect(-12,-6,24,14);
+      g.fillStyle(0x662200,1); g.fillRect(-8,-4,6,8); g.fillRect(2,-4,6,8);
+      g.fillStyle(0xff4400,0.7); g.fillRect(-6,10,4,4); g.fillRect(2,10,4,4);
+      g.generateTexture('bomber', 36, 30);
+
+      // Scout enemy
+      g.clear(); g.fillStyle(0x8800ff,1); g.fillCircle(0,0,8);
+      g.fillStyle(0xaa33ff,1); g.fillCircle(0,0,5);
+      g.fillStyle(0xff00ff,0.7); g.fillCircle(0,0,2);
+      g.generateTexture('scout', 20, 20);
+
+      // Armored enemy
+      g.clear(); g.fillStyle(0x444444,1); g.fillCircle(0,0,16);
+      g.fillStyle(0x666666,1); g.fillCircle(0,0,10);
+      g.fillStyle(0x888888,1); g.fillCircle(0,0,5);
+      g.fillStyle(0xff0000,0.8); g.fillCircle(0,0,3);
+      g.generateTexture('armored', 36, 36);
+
+      // Boss
+      g.clear(); g.fillStyle(0x660000,1); g.fillRect(-30,-20,60,40);
+      g.fillStyle(0x880000,1); g.fillRect(-26,-16,52,32);
+      g.fillStyle(0xffff00,0.9); g.fillCircle(0,0,10);
+      g.fillStyle(0xff6600,0.8); g.fillCircle(-22,-10,6);
+      g.fillStyle(0xff6600,0.8); g.fillCircle(22,-10,6);
+      g.fillStyle(0xff0000,0.7); g.fillCircle(-22,-10,3); g.fillCircle(22,-10,3);
+      g.fillStyle(0xff3300,0.6); g.fillRect(-28,16,8,6); g.fillRect(20,16,8,6);
+      g.generateTexture('boss', 64, 44);
+
+      // Ground infantry
+      g.clear(); g.fillStyle(0x663300,1); g.fillRect(-3,-6,7,12); g.fillCircle(0,-8,3);
+      g.generateTexture('infantry', 12, 16);
+
+      // Ground tank
+      g.clear(); g.fillStyle(0x555555,1); g.fillRect(-11,-7,22,14);
+      g.fillStyle(0x333333,1); g.fillRect(-5,-4,12,8);
+      g.fillStyle(0x444444,1); g.fillRect(6,-2,6,4);
+      g.generateTexture('tank', 24, 16);
+
+      // Ground launcher
+      g.clear(); g.fillStyle(0x444444,1); g.fillRect(-8,-5,16,10);
+      g.fillStyle(0xffaa00,1); g.fillRect(4,-8,5,5);
+      g.generateTexture('launcher', 20, 14);
+
+      // Fuel pickup
+      g.clear(); g.fillStyle(0x00ffff,0.8); g.fillCircle(0,0,9);
+      g.lineStyle(2, 0x00ffff, 0.5); g.strokeCircle(0,0,9);
+      g.fillStyle(0xffffff,0.6); g.fillCircle(-2,-2,2);
+      g.generateTexture('fuel', 20, 20);
+
+      // Weapon powerup
+      g.clear(); g.fillStyle(0x00ff00,0.8); g.fillCircle(0,0,10);
+      g.lineStyle(2, 0x00ff00, 0.6); g.strokeCircle(0,0,10);
+      g.fillStyle(0xffffff,0.5); g.fillCircle(-2,-2,3);
+      g.generateTexture('weaponPu', 24, 24);
+
+      // Life powerup
+      g.clear(); g.fillStyle(0xff00ff,0.8); g.fillCircle(0,0,10);
+      g.lineStyle(2, 0xff00ff, 0.6); g.strokeCircle(0,0,10);
+      g.fillStyle(0xffffff,0.5); g.fillCircle(-2,-2,3);
+      g.generateTexture('lifePu', 24, 24);
+
+      // Shield powerup
+      g.clear(); g.fillStyle(0x0088ff,0.8); g.fillCircle(0,0,10);
+      g.lineStyle(2, 0x0088ff, 0.6); g.strokeCircle(0,0,10);
+      g.fillStyle(0xffffff,0.5); g.fillCircle(-2,-2,3);
+      g.generateTexture('shieldPu', 24, 24);
+
+      // Bullet
+      g.clear(); g.fillStyle(0x00ff88,1); g.fillCircle(0,0,3);
+      g.fillStyle(0xffffff,0.6); g.fillCircle(0,0,1.5);
+      g.generateTexture('bullet', 8, 8);
+
+      // Enemy bullet
+      g.clear(); g.fillStyle(0xff3333,1); g.fillCircle(0,0,3);
+      g.fillStyle(0xff6666,0.6); g.fillCircle(0,0,1.5);
+      g.generateTexture('enemyBullet', 8, 8);
+
+      // Bomb
+      g.clear(); g.fillStyle(0xffff00,1); g.fillCircle(0,0,5);
+      g.fillStyle(0xffffff,0.5); g.fillCircle(0,0,2);
+      g.generateTexture('bomb', 12, 12);
+
+      // Star
+      g.clear(); g.fillStyle(0xffffff,1); g.fillCircle(0,0,1);
+      g.generateTexture('star', 4, 4);
+    }
+
+    // ================== GAME CONFIG ==================
     const config = {
       type: Phaser.AUTO, parent: 'game-container',
       width: window.innerWidth, height: window.innerHeight, backgroundColor: '#000',
@@ -194,111 +202,57 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
     function preload() {}
 
     function create() {
+      gameScene = this;
       this.input.on('pointerdown', () => { AudioSystem.init(); AudioSystem.resume(); });
+      // Keyboard - persistent, never removed
+      this.input.keyboard.on('keydown', (e) => { keys[e.key] = true; handleKeyboard(this, e); });
+      this.input.keyboard.on('keyup', (e) => { keys[e.key] = false; });
+      // Generate sprites
+      generateTextures(this);
       showTitleScreen(this);
       addTouchControls(this);
       addHUD(this);
       gameActive = false;
-      this.input.keyboard.on('keydown', (e) => { keys[e.key] = true; handleKeyboard(this, e); });
-      this.input.keyboard.on('keyup', (e) => { keys[e.key] = false; });
-    }
-
-    function update(time, delta) {
-      if (!gameActive || isPaused) return;
-
-      // Wave announcements
-      if (time - lastWaveTime > 20000) {
-        waveNum++;
-        lastWaveTime = time;
-        waveAnnounceTimer = 2000;
-        AudioSystem.playWaveAnnounce();
-      }
-      if (waveAnnounceTimer > 0) waveAnnounceTimer -= delta;
-
-      difficulty = 1 + Math.floor(time / 30000) * 0.12;
-      if (time - lastEnemySpawn > 1600 / difficulty) { spawnEnemy(this); lastEnemySpawn = time; }
-      if (time - lastBossSpawn > 45000) { spawnBoss(this); lastBossSpawn = time; }
-      if (time - lastFuelSpawn > 10000) { spawnFuel(this); lastFuelSpawn = time; }
-      if (time - lastPowerupSpawn > 15000) { spawnPowerup(this); lastPowerupSpawn = time; }
-      updatePlayer(this, time, delta);
-      updateBullets(this, delta);
-      updateEnemies(this, delta);
-      updateEnemyBullets(this, delta);
-      updateFuelPickups(this, delta);
-      updatePowerups(this, delta);
-      updateTerrain(this, delta);
-      updateGroundEnemies(this, delta);
-      updateParticles(this, delta);
-      updateSolvalou(this, delta);
-      updateScorePopups(this, delta);
-      checkCollisions(this);
-      if (comboTimer > 0) { comboTimer -= delta; if (comboTimer <= 0) comboCount = 0; }
-      if (time - (window.lastFuelCheck || 0) > 1000) {
-        fuel = Math.max(0, fuel - 1); window.lastFuelCheck = time;
-        if (fuel <= 0) loseLife(this);
-      }
-      distance += delta / 1000;
-      if (shakeTime > 0) shakeTime -= delta;
-      if (flashTime > 0) flashTime -= delta;
-      // Shield timer
-      if (shieldActive) {
-        shieldTimer -= delta;
-        if (shieldTimer <= 0) shieldActive = false;
-      }
-      updateHUD(this);
-      updateMissileWarnings(this);
     }
 
     // ================== TITLE SCREEN ==================
     function showTitleScreen(scene) {
       const w = scene.scale.width, h = scene.scale.height;
-      const bg = scene.add.graphics(); bg.fillStyle(0x000033, 1); bg.fillRect(0, 0, w, h);
-      // Animated stars
+      const bg = scene.add.graphics(); bg.fillStyle(0x000033,1); bg.fillRect(0,0,w,h);
       titleStarAnim = [];
       for (let i = 0; i < 120; i++) {
         const s = scene.add.graphics();
         const sz = 1 + Math.random() * 2.5;
         s.fillStyle(0xffffff, 0.5 + Math.random() * 0.5);
-        s.fillRect(Math.random() * w, Math.random() * h, sz, sz);
+        s.fillRect(Math.random()*w, Math.random()*h, sz, sz);
         s.setData('speed', 0.3 + Math.random() * 0.8);
         titleStarAnim.push(s);
       }
-      scene.tweens.add({
-        targets: titleStarAnim, y: '+=5', duration: 2000, yoyo: true, repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
+      scene.tweens.add({ targets: titleStarAnim, y: '+=5', duration: 2000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       const title = scene.add.text(w/2, h/2 - 100, 'STAR BLASTER', {
         fontSize: '64px', fontFamily: 'Arial', fontStyle: 'bold', color: '#00ff00',
         stroke: '#000000', strokeThickness: 6, align: 'center'
-      });
-      title.setOrigin(0.5); title.setDepth(100);
+      }); title.setOrigin(0.5); title.setDepth(100);
       scene.tweens.add({ targets: title, scaleX: 1.05, scaleY: 1.05, duration: 1500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       const sub = scene.add.text(w/2, h/2 - 30, 'Xevious-Style Arcade Shooter', {
         fontSize: '20px', fontFamily: 'Arial', color: '#00ffff', align: 'center'
-      });
-      sub.setOrigin(0.5); sub.setDepth(100);
+      }); sub.setOrigin(0.5); sub.setDepth(100);
       const instr = scene.add.text(w/2, h/2 + 60,
         'ARROWS: Move | SPACE: Shoot | B: Bomb | DOWN: Scav | S: Solvalou\nCollect FUEL!', {
         fontSize: '16px', fontFamily: 'Arial', color: '#ffffff', align: 'center'
-      });
-      instr.setOrigin(0.5); instr.setDepth(100);
+      }); instr.setOrigin(0.5); instr.setDepth(100);
       const highText = scene.add.text(w/2, h/2 + 140, `HIGH SCORE: ${highScore}`, {
         fontSize: '18px', fontFamily: 'Arial', color: '#ffff00'
-      });
-      highText.setOrigin(0.5); highText.setDepth(100);
+      }); highText.setOrigin(0.5); highText.setDepth(100);
       const startBtn = scene.add.text(w/2, h/2 + 200, 'TAP TO START', {
         fontSize: '24px', fontFamily: 'Arial', color: '#00ff00', stroke: '#000000', strokeThickness: 4
-      });
-      startBtn.setOrigin(0.5); startBtn.setDepth(100);
+      }); startBtn.setOrigin(0.5); startBtn.setDepth(100);
       startBtn.setInteractive({ useHandCursor: true });
       startBtn.on('pointerdown', () => startGame(scene));
-      scene.tweens.add({
-        targets: startBtn, scaleX: 1.1, scaleY: 1.1, duration: 800, yoyo: true, repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
+      scene.tweens.add({ targets: startBtn, scaleX: 1.1, scaleY: 1.1, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
 
-    // ================== TOUCH + KEYBOARD ==================
+    // ================== TOUCH CONTROLS ==================
     function addTouchControls(scene) {
       const w = scene.scale.width, h = scene.scale.height;
       const leftZone = scene.add.rectangle(0, h/2, w/2, h, 0x000000, 0); leftZone.setDepth(50); leftZone.setInteractive();
@@ -325,33 +279,20 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       }
     }
 
-    // ================== PAUSE OVERLAY ==================
     function togglePauseOverlay(scene, visible) {
       let pauseText = null;
-      if (scene._pauseOverlay) {
-        pauseText = scene._pauseOverlay;
-      } else {
-        pauseText = scene.add.graphics();
-        pauseText.setDepth(200);
-        pauseText.alpha = 0;
-        scene._pauseOverlay = pauseText;
-      }
+      if (scene._pauseOverlay) pauseText = scene._pauseOverlay;
+      else { pauseText = scene.add.graphics(); pauseText.setDepth(200); pauseText.alpha = 0; scene._pauseOverlay = pauseText; }
       if (visible) {
-        pauseText.clear();
-        pauseText.fillStyle(0x000000, 0.7);
-        pauseText.fillRect(0, 0, scene.scale.width, scene.scale.height);
+        pauseText.clear(); pauseText.fillStyle(0x000000, 0.7); pauseText.fillRect(0,0,scene.scale.width,scene.scale.height);
         const txt = scene.add.text(scene.scale.width/2, scene.scale.height/2, 'PAUSED', {
           fontSize: '56px', fontFamily: 'Arial', color: '#ffffff', stroke: '#000000', strokeThickness: 6
-        });
-        txt.setOrigin(0.5); txt.setDepth(210);
+        }); txt.setOrigin(0.5); txt.setDepth(210);
         const sub = scene.add.text(scene.scale.width/2, scene.scale.height/2 + 50, 'Press P or ESC to resume', {
           fontSize: '18px', fontFamily: 'Arial', color: '#88ff88', stroke: '#000000', strokeThickness: 3
-        });
-        sub.setOrigin(0.5); sub.setDepth(210);
+        }); sub.setOrigin(0.5); sub.setDepth(210);
         pauseText.alpha = 1;
-      } else {
-        pauseText.alpha = 0;
-      }
+      } else { pauseText.alpha = 0; }
     }
 
     // ================== HUD ==================
@@ -395,22 +336,23 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       scene.livesText.setText(`LIVES: ${lives}`);
       if (comboCount >= 2) {
         scene.comboText.setText(`COMBO x${comboCount}`);
-        scene.comboText.setAlpha(1);
-        scene.comboText.setScale(comboCount / 10 + 1);
+        scene.comboText.setAlpha(1); scene.comboText.setScale(comboCount / 10 + 1);
       } else { scene.comboText.setAlpha(0); scene.comboText.setScale(1); }
-      // Wave announcement
       if (waveAnnounceTimer > 0) {
         scene.waveText.setText(`WAVE ${waveNum}`);
         scene.waveText.setAlpha(Math.min(1, waveAnnounceTimer / 500));
-      } else {
-        scene.waveText.setAlpha(0);
-      }
+      } else { scene.waveText.setAlpha(0); }
     }
 
     // ================== START GAME ==================
     function startGame(scene) {
-      // Clear only game objects, not HUD/controls/keyboard
-      scene.children.removeAll();
+      // Remove only game objects, NOT HUD/controls/keyboard/title
+      const toRemove = [];
+      scene.children.iterate(child => {
+        if (child && child.hasData && child.hasData('type')) toRemove.push(child);
+      });
+      toRemove.forEach(c => scene.children.remove(c));
+
       AudioSystem.stopMusic();
       addTouchControls(scene);
       addHUD(scene);
@@ -431,31 +373,14 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
     // ================== PLAYER ==================
     function createPlayer(scene) {
       const w = scene.scale.width, h = scene.scale.height, px = w / 2, py = h - 120;
-      const ship = scene.add.graphics();
-      ship.x = px;
-      ship.y = py;
-      ship.fillStyle(0xcccccc, 1); ship.lineStyle(2, 0x888888, 1);
-      ship.fillRect(-8, -25, 16, 45); ship.strokeRect(-8, -25, 16, 45);
-      ship.fillStyle(0xaaaaaa, 1);
-      ship.fillTriangle(-8, -5, -28, 15, -8, 15);
-      ship.fillTriangle(8, -5, 28, 15, 8, 15);
-      ship.lineStyle(2, 0x666666, 1);
-      ship.strokeTriangle(-8, -5, -28, 15, -8, 15);
-      ship.strokeTriangle(8, -5, 28, 15, 8, 15);
-      ship.fillStyle(0x00ff88, 0.7); ship.fillCircle(0, -15, 5);
-      const engine = scene.add.graphics();
-      engine.x = px - 5;
-      engine.y = py + 22;
-      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(0, 0, 10, 8);
-      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(2, 6, 6, 6);
-      ship.data = { type: 'player', health: 1, engine: engine }; engine.setData('parent', ship);
-      scene.tweens.add({ targets: engine, alpha: 0.4, duration: 120, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      const ship = scene.add.sprite(px, py, 'playerShip');
+      ship.setData('type', 'player');
+      ship.setData('health', 1);
       return ship;
     }
 
     function updatePlayer(scene, time, delta) {
       const w = scene.scale.width;
-      // Solvalou takes input when active
       if (solvalou) {
         if (touchLeft) player.x = Math.max(30, player.x - 5 * delta / 16);
         if (touchRight) player.x = Math.min(w - 30, player.x + 5 * delta / 16);
@@ -465,7 +390,8 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       }
       if ((touchShoot || keys[' ']) && time - lastShootTime > 150) { shootBullet(scene); lastShootTime = time; }
       if ((touchBomb || keys['b'] || keys['B']) && time - lastBombTime > 500) { dropBomb(scene); lastBombTime = time; }
-      // Scav scanner - persistent object
+
+      // Scav scanner
       if (scavGraphics) {
         if (scavActive) {
           scavGraphics.clear();
@@ -473,31 +399,28 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
           scavGraphics.strokeRect(player.x - 40, scene.scale.height - 95, 80, 10);
           scavGraphics.setVisible(true);
           markGroundEnemies(scene);
-        } else {
-          scavGraphics.setVisible(false);
-        }
+        } else { scavGraphics.setVisible(false); }
       }
+
       // Shield visual
       if (shieldActive) {
         if (!player.shield) {
           player.shield = scene.add.graphics();
           player.shield.lineStyle(3, 0x0088ff, 0.6);
-          player.shield.strokeCircle(player.x, player.y, 28);
+          player.shield.strokeCircle(0, 0, 28);
+          player.shield.setPosition(player.x, player.y);
           player.shield.setDepth(59);
         }
-        player.shield.x = player.x;
-        player.shield.y = player.y;
+        player.shield.setPosition(player.x, player.y);
         player.shield.setAlpha(0.4 + Math.sin(time / 150) * 0.2);
       } else if (player.shield) {
-        scene.children.remove(player.shield);
-        player.shield = null;
+        scene.children.remove(player.shield); player.shield = null;
       }
+
       // Invincibility flash
       if (time < invincibleUntil) {
         player.setAlpha(Math.sin(time / 60) > 0 ? 0.3 : 1);
-      } else {
-        player.setAlpha(1);
-      }
+      } else { player.setAlpha(1); }
     }
 
     // ================== STARFIELD ==================
@@ -522,10 +445,27 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
     // ================== TERRAIN ==================
     function createTerrain(scene) {
       const w = scene.scale.width, h = scene.scale.height;
+      terrain = [];
+
+      // Far mountains (parallax layer 1)
+      for (let i = 0; i < 4; i++) {
+        const x = Math.random() * w, y = h - 130 - Math.random() * 40, size = 35 + Math.random() * 45;
+        const mtn = scene.add.graphics(); mtn.fillStyle(0x1a3309, 1);
+        mtn.beginPath(); mtn.moveTo(x - size, y + size); mtn.lineTo(x, y); mtn.lineTo(x + size, y + size);
+        mtn.closePath(); mtn.fillPath();
+        terrain.push({ obj: mtn, speed: 0.9 + Math.random() * 0.4, parallax: 0.4 });
+      }
+
       // Ground
       const ground = scene.add.graphics();
       ground.fillStyle(0x2d5016, 1); ground.fillRect(0, h - 100, w, 100);
       terrain.push({ obj: ground, speed: 2.2, parallax: 1 });
+
+      // Road
+      const road = scene.add.graphics(); road.fillStyle(0x444444, 1); road.fillRect(w/2 - 28, 0, 56, h);
+      road.lineStyle(2, 0xffff00, 0.5); road.setLineDash([18, 18]); road.lineBetween(w/2, 0, w/2, h);
+      terrain.push({ obj: road, speed: 2.4, parallax: 1.1 });
+
       // Water patches
       for (let i = 0; i < 3; i++) {
         const water = scene.add.graphics();
@@ -534,22 +474,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         water.fillRect(Math.random() * w, wy, 80 + Math.random() * 120, 15);
         terrain.push({ obj: water, speed: 2.0 + Math.random() * 0.5, parallax: 0.9 });
       }
-      // Buildings
-      for (let i = 0; i < 6; i++) {
-        const bldg = scene.add.graphics();
-        const bx = Math.random() * w, by = h - 90 - Math.random() * 60;
-        const bw = 10 + Math.random() * 20, bh = 20 + Math.random() * 40;
-        bldg.fillStyle(0x334455, 1); bldg.fillRect(bx - bw/2, by - bh, bw, bh);
-        bldg.lineStyle(1, 0x556677, 0.5); bldg.strokeRect(bx - bw/2, by - bh, bw, bh);
-        // Windows
-        for (let wy = by - bh + 5; wy < by - 5; wy += 8) {
-          for (let wx = bx - bw/2 + 3; wx < bx + bw/2 - 3; wx += 6) {
-            bldg.fillStyle(Math.random() > 0.3 ? 0xffee44 : 0x334455, 0.6);
-            bldg.fillRect(wx, wy, 3, 4);
-          }
-        }
-        terrain.push({ obj: bldg, speed: 1.8 + Math.random() * 0.4, parallax: 0.8 });
-      }
+
       // Bridges
       for (let i = 0; i < 2; i++) {
         const bridge = scene.add.graphics();
@@ -558,24 +483,30 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         bridge.fillRect(Math.random() * w, bry, 60, 6);
         terrain.push({ obj: bridge, speed: 2.1, parallax: 0.95 });
       }
-      // Mountains (parallax far)
-      for (let i = 0; i < 4; i++) {
-        const x = Math.random() * w, y = h - 130 - Math.random() * 40, size = 35 + Math.random() * 45;
-        const mtn = scene.add.graphics(); mtn.fillStyle(0x1a3309, 1);
-        mtn.beginPath(); mtn.moveTo(x - size, y + size); mtn.lineTo(x, y); mtn.lineTo(x + size, y + size);
-        mtn.closePath(); mtn.fillPath();
-        terrain.push({ obj: mtn, speed: 0.9 + Math.random() * 0.4, parallax: 0.4 });
+
+      // Buildings
+      for (let i = 0; i < 6; i++) {
+        const bldg = scene.add.graphics();
+        const bx = Math.random() * w, by = h - 90 - Math.random() * 60;
+        const bw = 10 + Math.random() * 20, bh = 20 + Math.random() * 40;
+        bldg.fillStyle(0x334455, 1); bldg.fillRect(bx - bw/2, by - bh, bw, bh);
+        bldg.lineStyle(1, 0x556677, 0.5); bldg.strokeRect(bx - bw/2, by - bh, bw, bh);
+        for (let wy = by - bh + 5; wy < by - 5; wy += 8) {
+          for (let wx = bx - bw/2 + 3; wx < bx + bw/2 - 3; wx += 6) {
+            bldg.fillStyle(Math.random() > 0.3 ? 0xffee44 : 0x334455, 0.6);
+            bldg.fillRect(wx, wy, 3, 4);
+          }
+        }
+        terrain.push({ obj: bldg, speed: 1.8 + Math.random() * 0.4, parallax: 0.8 });
       }
+
       // Trees
       for (let i = 0; i < 12; i++) {
         const x = Math.random() * w, y = h - 105 - Math.random() * 70;
         const tree = scene.add.graphics(); tree.fillStyle(0x0d4d00, 1); tree.fillCircle(x, y, 7 + Math.random() * 5);
         terrain.push({ obj: tree, speed: 2.0 + Math.random(), parallax: 0.9 });
       }
-      // Road
-      const road = scene.add.graphics(); road.fillStyle(0x444444, 1); road.fillRect(w/2 - 28, 0, 56, h);
-      road.lineStyle(2, 0xffff00, 0.5); road.setLineDash([18, 18]); road.lineBetween(w/2, 0, w/2, h);
-      terrain.push({ obj: road, speed: 2.4, parallax: 1.1 });
+
       createStarfield(scene);
     }
 
@@ -593,29 +524,24 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       if (solvalou) {
         scene.children.remove(solvalou); solvalou = null;
       } else {
-        const w = scene.scale.width, h = scene.scale.height;
-        solvalou = scene.add.graphics();
-        solvalou.x = player.x;
-        solvalou.y = player.y - 70;
-        solvalou.fillStyle(0x00aaff, 1);
-        solvalou.fillTriangle(-10, -25, 0, -50, 10, -25);
-        solvalou.data = { type: 'solvalou', x: player.x, y: player.y - 70, vx: 0 };
-        scene.add.tween({ targets: solvalou, alpha: { from: 0.6, to: 1 }, duration: 80, yoyo: true, repeat: 2 });
+        solvalou = scene.add.sprite(player.x, player.y - 70, 'solvalouShip');
+        solvalou.setData('type', 'solvalou');
+        solvalou.setData('x', player.x); solvalou.setData('y', player.y - 70);
+        scene.tweens.add({ targets: solvalou, alpha: { from: 0.6, to: 1 }, duration: 80, yoyo: true, repeat: 2 });
       }
     }
     function updateSolvalou(scene, delta) {
       if (!solvalou) return;
       const data = solvalou.data;
-      // Solvalou moves with arrow keys
       if (keys['ArrowLeft'] || keys['a']) data.x -= 3.5 * delta / 16;
       if (keys['ArrowRight'] || keys['d']) data.x += 3.5 * delta / 16;
       data.x = Math.max(40, Math.min(scene.scale.width - 40, data.x));
       solvalou.x = data.x; solvalou.y = data.y;
-      // Auto-fire
       if (Math.random() < 0.04) {
-        const b = scene.add.graphics(); b.x = data.x; b.y = data.y - 8;
-        b.fillStyle(0x00ffff, 1); b.fillCircle(0, 0, 2);
-        b.data = { type: 'solvalouBullet', speed: 9 }; bullets.push(b);
+        const b = scene.add.sprite(data.x, data.y - 8, 'bullet');
+        b.setData('type', 'solvalouBullet'); b.setData('speed', 9);
+        b.setTexture('bullet'); b.setTint(0x00ffff);
+        bullets.push(b);
       }
       if (data.y < 40) { scene.children.remove(solvalou); solvalou = null; }
     }
@@ -630,71 +556,54 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       else if (typeRoll < 0.6) type = 'scout';
       else if (typeRoll < 0.75) type = 'armored';
       else type = 'boss';
+
       const px = w / 2 + (Math.random() - 0.5) * (w * 0.65), py = -35;
-      const enemy = scene.add.graphics();
-      enemy.x = px; enemy.y = py;
+      let enemy;
       let data = { type: 'enemy', health: 1, speed: 2.1, shootChance: 0.0012, points: 100, vx: 0 };
+
       if (type === 'fighter') {
-        enemy.fillStyle(0xcc0000, 1); enemy.lineStyle(2, 0xff3333, 1);
-        enemy.fillTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
-        enemy.strokeTriangle(px - 14, py + 12, px, py - 14, px + 14, py + 12);
+        enemy = scene.add.sprite(px, py, 'fighter');
         data.health = 1; data.speed = 3.4; data.shootChance = 0.003; data.points = 70; data.vx = (Math.random() - 0.5) * 1.8;
       } else if (type === 'bomber') {
-        enemy.fillStyle(0xdd8800, 1); enemy.lineStyle(2, 0xffaa33, 1);
-        enemy.fillRect(px - 16, py - 10, 32, 22); enemy.strokeRect(px - 16, py - 10, 32, 22);
-        enemy.fillStyle(0x662200, 1); enemy.fillRect(px - 8, py - 4, 6, 8); enemy.fillRect(px + 2, py - 4, 6, 8);
+        enemy = scene.add.sprite(px, py, 'bomber');
         data.health = 2; data.speed = 1.7; data.shootChance = 0.007; data.points = 170;
       } else if (type === 'scout') {
-        enemy.fillStyle(0x8800ff, 1); enemy.lineStyle(2, 0xaa33ff, 1);
-        enemy.fillCircle(px, py, 8); enemy.strokeCircle(px, py, 8);
+        enemy = scene.add.sprite(px, py, 'scout');
         data.health = 1; data.speed = 5.2; data.shootChance = 0.002; data.points = 90; data.vx = (Math.random() - 0.5) * 3;
       } else if (type === 'armored') {
-        enemy.fillStyle(0x444444, 1); enemy.lineStyle(3, 0x888888, 1);
-        enemy.fillCircle(px, py, 16); enemy.strokeCircle(px, py, 16);
+        enemy = scene.add.sprite(px, py, 'armored');
         data.health = 5; data.speed = 1.2; data.shootChance = 0.005; data.points = 250;
       } else if (type === 'boss') {
-        enemy.fillStyle(0x440000, 1); enemy.lineStyle(4, 0xff2222, 1);
-        enemy.fillRect(px - 28, py - 18, 56, 38); enemy.strokeRect(px - 28, py - 18, 56, 38);
-        enemy.fillStyle(0xffff00, 0.9); enemy.fillCircle(px, py, 10); enemy.strokeCircle(px, py, 10);
-        enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px - 22, py - 10, 5); enemy.strokeCircle(px - 22, py - 10, 5);
-        enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px + 22, py - 10, 5); enemy.strokeCircle(px + 22, py - 10, 5);
+        enemy = scene.add.sprite(px, py, 'boss');
         data.health = 14; data.speed = 0.6; data.shootChance = 0.014; data.points = 1400;
         data.sideWeakPoints = [{x: px - 22, y: py - 10}, {x: px + 22, y: py - 10}];
         bossActive = true;
       }
-      enemy.setData('type', type); enemy.setData('health', data.health); enemy.data = data; enemies.push(enemy);
+
+      enemy.setData('type', type); enemy.setData('health', data.health); enemy.data = data;
+      enemies.push(enemy);
     }
 
-    // ================== BOSS SPAWNER (FIXED - was undefined) ==================
-    function spawnBoss(scene) {
-      spawnEnemy(scene);
-    }
+    function spawnBoss(scene) { spawnEnemy(scene); }
 
     function spawnGroundEnemy(scene) {
       const w = scene.scale.width, h = scene.scale.height;
       const type = Math.random() < 0.5 ? 'infantry' : Math.random() < 0.7 ? 'tank' : 'launcher';
-      const ge = scene.add.graphics();
+      const ge = scene.add.sprite(0, h - 92, type === 'infantry' ? 'infantry' : type === 'tank' ? 'tank' : 'launcher');
       let data = { type: 'ground', gtype: type, health: 1, speed: 1.8, points: 80, marked: false, markTimer: 0 };
-      if (type === 'infantry') {
-        ge.fillStyle(0x663300, 1); ge.fillRect(0, 0, 8, 12); ge.fillCircle(4, 3, 3);
-        data.health = 1; data.speed = 2.4; data.points = 50;
-      } else if (type === 'tank') {
-        ge.fillStyle(0x555555, 1); ge.fillRect(0, 0, 22, 14); ge.fillStyle(0x333333, 1); ge.fillRect(4, 3, 14, 8);
-        data.health = 3; data.speed = 1.3; data.points = 140;
-      } else {
-        ge.fillStyle(0x444444, 1); ge.fillRect(0, 0, 16, 10); ge.fillStyle(0xffaa00, 1); ge.fillRect(6, -4, 4, 5);
-        data.health = 2; data.speed = 1.1; data.points = 110;
-      }
-      ge.x = Math.random() * (w - 60) + 30; ge.y = h - 92;
-      ge.data = data; groundEnemies.push(ge);
+      if (type === 'infantry') { data.health = 1; data.speed = 2.4; data.points = 50; }
+      else if (type === 'tank') { data.health = 3; data.speed = 1.3; data.points = 140; }
+      else { data.health = 2; data.speed = 1.1; data.points = 110; }
+      ge.x = Math.random() * (w - 60) + 30;
+      ge.setData('type', 'ground'); ge.setData('health', data.health); ge.data = data;
+      groundEnemies.push(ge);
     }
 
     function markGroundEnemies(scene) {
       const sx = player.x, sy = scene.scale.height - 90;
       groundEnemies.forEach(ge => {
         if (Math.abs(ge.x - sx) < 50 && Math.abs(ge.y - sy) < 30) {
-          ge.data.marked = true;
-          ge.data.markTimer = 3000;
+          ge.data.marked = true; ge.data.markTimer = 3000;
         }
       });
     }
@@ -703,10 +612,8 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       for (let i = groundEnemies.length - 1; i >= 0; i--) {
         const ge = groundEnemies[i];
         ge.x += (Math.random() - 0.5) * 0.6 * delta / 16;
-        // Mark timer
         if (ge.data.marked) {
           ge.data.markTimer -= delta;
-          // Use reusable mark graphics (FIXED: was creating new graphics every frame)
           if (!ge.markIndicator) {
             ge.markIndicator = scene.add.graphics();
             ge.markIndicator.lineStyle(1, 0xff00ff, 0.8);
@@ -717,14 +624,15 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
           if (ge.data.markTimer <= 0) { ge.data.marked = false; scene.children.remove(ge.markIndicator); ge.markIndicator = null; }
         }
         if (Math.random() < 0.006 && ge.data.gtype === 'launcher') {
-          const mb = scene.add.graphics(); mb.fillStyle(0xff4400, 1); mb.fillCircle(ge.x + 8, ge.y - 6, 3);
-          mb.data = { type: 'missile', speed: 2.8, targetX: player.x }; enemyBullets.push(mb);
+          const mb = scene.add.sprite(ge.x + 8, ge.y - 6, 'enemyBullet');
+          mb.setData('type', 'missile'); mb.setData('speed', 2.8); mb.setData('targetX', player.x);
+          mb.setTint(0xff4400);
+          enemyBullets.push(mb);
           missileWarnings.push({ time: 1200, x: ge.x });
         }
         if (ge.x < 20 || ge.x > scene.scale.width - 20) ge.data.speed *= -1;
         if (Math.random() < 0.0008) { scene.children.remove(ge); groundEnemies.splice(i, 1); }
       }
-      // Periodically spawn ground enemies
       if (Math.random() < 0.002 * difficulty) spawnGroundEnemy(scene);
     }
 
@@ -738,9 +646,10 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         }
         if (data.type === 'bomber' && Math.random() < data.shootChance * delta / 16 * 1.3) {
           const leadX = player.x + (player.x - enemy.x) * 0.3;
-          const b = scene.add.graphics(); b.x = enemy.x; b.y = enemy.y + 12;
-          b.fillStyle(0xff0000, 1); b.fillCircle(0, 0, 3);
-          b.data = { type: 'enemyBullet', speed: 3.8, vx: (leadX - enemy.x) * 0.025 }; enemyBullets.push(b);
+          const b = scene.add.sprite(enemy.x, enemy.y + 12, 'enemyBullet');
+          b.setData('type', 'enemyBullet'); b.setData('speed', 3.8); b.setData('vx', (leadX - enemy.x) * 0.025);
+          b.setTint(0xff0000);
+          enemyBullets.push(b);
         } else if (Math.random() < data.shootChance * delta / 16) {
           enemyShoot(scene, enemy);
         }
@@ -751,10 +660,10 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
     }
 
     function enemyShoot(scene, enemy) {
-      const bullet = scene.add.graphics();
-      bullet.x = enemy.x; bullet.y = enemy.y;
-      bullet.fillStyle(0xff0000, 1); bullet.fillCircle(0, 0, 3);
-      bullet.data = { type: 'enemyBullet', speed: 4, vx: 0 }; enemyBullets.push(bullet);
+      const b = scene.add.sprite(enemy.x, enemy.y, 'enemyBullet');
+      b.setData('type', 'enemyBullet'); b.setData('speed', 4); b.setData('vx', 0);
+      b.setTint(0xff0000);
+      enemyBullets.push(b);
     }
 
     function updateEnemyBullets(scene, delta) {
@@ -768,41 +677,32 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
 
     // ================== BULLETS ==================
     function shootBullet(scene) {
-      const bullet = scene.add.graphics();
-      bullet.x = player.x; bullet.y = player.y - 30;
-      bullet.fillStyle(0x00ff00, 1); bullet.fillCircle(0, 0, 3);
-      bullet.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
-      bullets.push(bullet); AudioSystem.playShoot();
-      
-      // Weapon upgrade system
+      const b = scene.add.sprite(player.x, player.y - 30, 'bullet');
+      b.setData('type', 'bullet'); b.setData('speed', 8); b.setData('trail', true); b.setData('trailColor', 0x00ff00);
+      bullets.push(b); AudioSystem.playShoot();
+
       if (weaponLevel >= 2) {
-        const b2 = scene.add.graphics(); b2.x = player.x - 12; b2.y = player.y - 25;
-        b2.fillStyle(0x00ff00, 1); b2.fillCircle(0, 0, 2.5);
-        b2.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
+        const b2 = scene.add.sprite(player.x - 12, player.y - 25, 'bullet');
+        b2.setData('type', 'bullet'); b2.setData('speed', 8); b2.setData('trail', true); b2.setData('trailColor', 0x00ff00);
         bullets.push(b2);
-        const b3 = scene.add.graphics(); b3.x = player.x + 12; b3.y = player.y - 25;
-        b3.fillStyle(0x00ff00, 1); b3.fillCircle(0, 0, 2.5);
-        b3.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
+        const b3 = scene.add.sprite(player.x + 12, player.y - 25, 'bullet');
+        b3.setData('type', 'bullet'); b3.setData('speed', 8); b3.setData('trail', true); b3.setData('trailColor', 0x00ff00);
         bullets.push(b3);
       }
       if (weaponLevel >= 3) {
-        const b4 = scene.add.graphics(); b4.x = player.x - 20; b4.y = player.y - 20;
-        b4.fillStyle(0x00ff00, 1); b4.fillCircle(0, 0, 2);
-        b4.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: -0.5 };
+        const b4 = scene.add.sprite(player.x - 20, player.y - 20, 'bullet');
+        b4.setData('type', 'bullet'); b4.setData('speed', 7.5); b4.setData('trail', true); b4.setData('trailColor', 0x00ff00); b4.setData('vx', -0.5);
         bullets.push(b4);
-        const b5 = scene.add.graphics(); b5.x = player.x + 20; b5.y = player.y - 20;
-        b5.fillStyle(0x00ff00, 1); b5.fillCircle(0, 0, 2);
-        b5.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: 0.5 };
+        const b5 = scene.add.sprite(player.x + 20, player.y - 20, 'bullet');
+        b5.setData('type', 'bullet'); b5.setData('speed', 7.5); b5.setData('trail', true); b5.setData('trailColor', 0x00ff00); b5.setData('vx', 0.5);
         bullets.push(b5);
       }
     }
 
     function dropBomb(scene) {
-      const bomb = scene.add.graphics();
-      bomb.x = player.x; bomb.y = player.y + 18;
-      bomb.fillStyle(0xffff00, 1); bomb.fillCircle(0, 0, 5);
-      bomb.data = { type: 'bomb', speed: 3.2, vx: (Math.random() - 0.5) * 0.6, trail: true, trailColor: 0xffff00 };
-      bullets.push(bomb); AudioSystem.playBomb();
+      const b = scene.add.sprite(player.x, player.y + 18, 'bomb');
+      b.setData('type', 'bomb'); b.setData('speed', 3.2); b.setData('vx', (Math.random() - 0.5) * 0.6); b.setData('trail', true); b.setData('trailColor', 0xffff00);
+      bullets.push(b); AudioSystem.playBomb();
     }
 
     function updateBullets(scene, delta) {
@@ -810,7 +710,6 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         const bullet = bullets[i];
         bullet.y -= bullet.data.speed * delta / 16;
         if (bullet.data.vx) bullet.x += bullet.data.vx * delta / 16;
-        // Trail effect (FIXED: proper Phaser graphics particles)
         if (bullet.data.trail && Math.random() < 0.3) {
           const trail = scene.add.graphics();
           trail.x = bullet.x + (Math.random() - 0.5) * 4;
@@ -840,19 +739,13 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         if (p.data && p.data.vx !== undefined) {
-          // Real Phaser graphics particle
           p.x += p.data.vx * delta / 16; p.y += p.data.vy * delta / 16;
           p.data.life -= delta / 16; p.setAlpha(Math.max(0.1, p.data.life / 22));
           if (p.data.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
         } else if (p.data && p.data.life !== undefined) {
-          // Trail particle
-          p.setAlpha(p.data.life / 8);
-          p.data.life -= delta / 16;
+          p.setAlpha(p.data.life / 8); p.data.life -= delta / 16;
           if (p.data.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
-        } else {
-          // Fallback - remove
-          scene.children.remove(p); particles.splice(i, 1);
-        }
+        } else { scene.children.remove(p); particles.splice(i, 1); }
       }
     }
 
@@ -862,8 +755,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         fontSize: '16px', fontFamily: 'Arial', color: '#ffff00', stroke: '#000000', strokeThickness: 2
       });
       popup.setOrigin(0.5); popup.setDepth(65);
-      popup.setData('vy', -1.5);
-      popup.setData('life', 1200);
+      popup.setData('vy', -1.5); popup.setData('life', 1200);
       scorePopups.push(popup);
     }
 
@@ -874,65 +766,43 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         p.setData('life', p.data.life - delta);
         const alpha = Math.max(0, p.data.life / 1200);
         p.setAlpha(alpha);
-        if (p.data.life <= 0) {
-          scene.children.remove(p);
-          scorePopups.splice(i, 1);
-        }
+        if (p.data.life <= 0) { scene.children.remove(p); scorePopups.splice(i, 1); }
       }
     }
 
     // ================== FUEL + SPAWN ==================
     function spawnFuel(scene) {
-      const f = scene.add.graphics();
+      const f = scene.add.sprite(0, -18, 'fuel');
       f.x = Math.random() * (scene.scale.width - 50) + 25;
-      f.y = -18;
-      f.fillStyle(0x00ffff, 0.6); f.fillCircle(0, 0, 9);
-      f.data = { type: 'fuel' }; fuelPickups.push(f);
+      f.setData('type', 'fuel'); fuelPickups.push(f);
     }
-    
+
     function spawnPowerup(scene) {
       const types = ['weapon', 'life', 'shield'];
       const type = types[Math.floor(Math.random() * types.length)];
-      const p = scene.add.graphics();
+      const tex = type === 'weapon' ? 'weaponPu' : type === 'life' ? 'lifePu' : 'shieldPu';
+      const p = scene.add.sprite(0, -18, tex);
       p.x = Math.random() * (scene.scale.width - 50) + 25;
-      p.y = -18;
-      if (type === 'weapon') {
-        p.fillStyle(0x00ff00, 0.8); p.fillCircle(0, 0, 10);
-        p.lineStyle(2, 0x00ff00, 0.6); p.strokeCircle(0, 0, 10);
-      } else if (type === 'life') {
-        p.fillStyle(0xff00ff, 0.8); p.fillCircle(0, 0, 10);
-        p.lineStyle(2, 0xff00ff, 0.6); p.strokeCircle(0, 0, 10);
-      } else {
-        p.fillStyle(0x0088ff, 0.8); p.fillCircle(0, 0, 10);
-        p.lineStyle(2, 0x0088ff, 0.6); p.strokeCircle(0, 0, 10);
-      }
-      p.data = { type: 'powerup', powerupType: type };
+      p.setData('type', 'powerup'); p.setData('powerupType', type);
       powerups.push(p);
     }
-    
+
     function updatePowerups(scene, delta) {
       for (let i = powerups.length - 1; i >= 0; i--) {
         const p = powerups[i];
         p.y += 2.1 * delta / 16;
         if (p.y > scene.scale.height + 20) { scene.children.remove(p); powerups.splice(i, 1); continue; }
-        // Collect power-up
         if (Math.abs(p.x - player.x) < 24 && Math.abs(p.y - player.y) < 24) {
           if (p.data.powerupType === 'weapon') {
             weaponLevel = Math.min(3, weaponLevel + 1);
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, 'WEAPON UP!');
+            AudioSystem.playFuelPickup(); addScorePopup(scene, p.x, p.y, 'WEAPON UP!');
           } else if (p.data.powerupType === 'life') {
-            lives++;
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, '+1 LIFE!');
+            lives++; AudioSystem.playFuelPickup(); addScorePopup(scene, p.x, p.y, '+1 LIFE!');
           } else if (p.data.powerupType === 'shield') {
-            shieldActive = true;
-            shieldTimer = 8000;
-            AudioSystem.playFuelPickup();
-            addScorePopup(scene, p.x, p.y, 'SHIELD!');
+            shieldActive = true; shieldTimer = 8000;
+            AudioSystem.playFuelPickup(); addScorePopup(scene, p.x, p.y, 'SHIELD!');
           }
-          scene.children.remove(p);
-          powerups.splice(i, 1);
+          scene.children.remove(p); powerups.splice(i, 1);
         }
       }
     }
@@ -953,7 +823,6 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
               scene.children.remove(enemy); enemies.splice(j, 1);
               comboCount++; comboTimer = 2200;
               if (enemy.data.type === 'boss') bossActive = false;
-              // Drop power-up chance
               if (Math.random() < 0.15) spawnPowerup(scene);
             }
             break;
@@ -984,12 +853,10 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       for (let i = enemyBullets.length - 1; i >= 0; i--) {
         const bullet = enemyBullets[i];
         if (shieldActive && Math.abs(bullet.x - player.x) < 30 && Math.abs(bullet.y - player.y) < 30) {
-          AudioSystem.playHit();
-          createExplosion(scene, bullet.x, bullet.y, 0x0088ff);
-          scene.children.remove(bullet); enemyBullets.splice(i, 1);
-          continue;
+          AudioSystem.playHit(); createExplosion(scene, bullet.x, bullet.y, 0x0088ff);
+          scene.children.remove(bullet); enemyBullets.splice(i, 1); continue;
         }
-        const time = game.time.now;
+        const time = scene.time.now;
         if (time < invincibleUntil) continue;
         if (Math.abs(bullet.x - player.x) < 20 && Math.abs(bullet.y - player.y) < 26) {
           AudioSystem.playHit(); scene.children.remove(bullet); enemyBullets.splice(i, 1); loseLife(scene); break;
@@ -998,14 +865,12 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       // Player collisions with enemies
       for (let i = enemies.length - 1; i >= 0; i--) {
         const enemy = enemies[i];
-        const time = game.time.now;
+        const time = scene.time.now;
         if (time < invincibleUntil) continue;
         if (Math.abs(enemy.x - player.x) < 26 && Math.abs(enemy.y - player.y) < 32) {
           if (shieldActive) {
             createExplosion(scene, enemy.x, enemy.y);
-            scene.children.remove(enemy); enemies.splice(i, 1);
-            shieldActive = false;
-            continue;
+            scene.children.remove(enemy); enemies.splice(i, 1); shieldActive = false; continue;
           }
           AudioSystem.playExplosion(); createExplosion(scene, enemy.x, enemy.y);
           scene.children.remove(enemy); enemies.splice(i, 1); loseLife(scene); shakeTime = 340;
@@ -1023,7 +888,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
 
     function loseLife(scene) {
       lives--;
-      invincibleUntil = game.time.now + 1500;
+      invincibleUntil = scene.time.now + 1500;
       shakeTime = 520; flashTime = 340;
       if (lives <= 0) gameOver(scene);
     }
@@ -1034,9 +899,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         missileWarnings = missileWarnings.filter(m => { m.time -= 16; return m.time > 0; });
         scene.warningText.setText('!!! MISSILE INCOMING !!!');
         scene.warningText.setAlpha(Math.sin(Date.now() / 80) * 0.5 + 0.6);
-      } else {
-        scene.warningText.setAlpha(0);
-      }
+      } else { scene.warningText.setAlpha(0); }
     }
 
     // ================== GAME OVER ==================
@@ -1060,10 +923,65 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
       }); restartText.setOrigin(0.5); restartText.setDepth(100);
       restartText.setInteractive({ useHandCursor: true });
       restartText.on('pointerdown', () => {
-        // Don't remove ALL children - keep HUD and keyboard
+        // Remove only game objects, keep HUD/controls
+        const toRemove = [];
+        scene.children.iterate(child => {
+          if (child && child.hasData && child.hasData('type')) toRemove.push(child);
+        });
+        toRemove.forEach(c => scene.children.remove(c));
         AudioSystem.stopMusic();
         startGame(scene);
       });
+    }
+
+    // ================== UPDATE ==================
+    function update(time, delta) {
+      if (!gameActive || isPaused) return;
+
+      // Wave announcements
+      if (time - lastWaveTime > 20000) {
+        waveNum++; lastWaveTime = time;
+        waveAnnounceTimer = 2000;
+        AudioSystem.playWaveAnnounce();
+      }
+      if (waveAnnounceTimer > 0) waveAnnounceTimer -= delta;
+
+      difficulty = 1 + Math.floor(time / 30000) * 0.12;
+      if (time - lastEnemySpawn > 1600 / difficulty) { spawnEnemy(gameScene); lastEnemySpawn = time; }
+      if (time - lastBossSpawn > 45000) { spawnBoss(gameScene); lastBossSpawn = time; }
+      if (time - lastFuelSpawn > 10000) { spawnFuel(gameScene); lastFuelSpawn = time; }
+      if (time - lastPowerupSpawn > 15000) { spawnPowerup(gameScene); lastPowerupSpawn = time; }
+      updatePlayer(gameScene, time, delta);
+      updateBullets(gameScene, delta);
+      updateEnemies(gameScene, delta);
+      updateEnemyBullets(gameScene, delta);
+      updateFuelPickups(gameScene, delta);
+      updatePowerups(gameScene, delta);
+      updateTerrain(gameScene, delta);
+      updateGroundEnemies(gameScene, delta);
+      updateParticles(gameScene, delta);
+      updateSolvalou(gameScene, delta);
+      updateScorePopups(gameScene, delta);
+      checkCollisions(gameScene);
+      if (comboTimer > 0) { comboTimer -= delta; if (comboTimer <= 0) comboCount = 0; }
+      if (time - (window.lastFuelCheck || 0) > 1000) {
+        fuel = Math.max(0, fuel - 1); window.lastFuelCheck = time;
+        if (fuel <= 0) loseLife(gameScene);
+      }
+      distance += delta / 1000;
+      if (shakeTime > 0) shakeTime -= delta;
+      if (flashTime > 0) flashTime -= delta;
+      if (shieldActive) { shieldTimer -= delta; if (shieldTimer <= 0) shieldActive = false; }
+      updateHUD(gameScene);
+      updateMissileWarnings(gameScene);
+    }
+
+    function updateFuelPickups(scene, delta) {
+      for (let i = fuelPickups.length - 1; i >= 0; i--) {
+        const f = fuelPickups[i];
+        f.y += 2.1 * delta / 16;
+        if (f.y > scene.scale.height + 20) { scene.children.remove(f); fuelPickups.splice(i, 1); }
+      }
     }
 
     // Boot game
