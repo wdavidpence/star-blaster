@@ -39,7 +39,8 @@ Iteration 37: Added invincibility frames after death (1.5s)
 Iteration 38: Added bullet trail effects
 Iteration 39: Added score popups on kills
 Iteration 40: Added ground terrain details with buildings and water
--->
+Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, memory leaks
+-->>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -170,7 +171,8 @@ Iteration 40: Added ground terrain details with buildings and water
     let game, player, bullets = [], enemies = [], enemyBullets = [], fuelPickups = [], powerups = [], terrain = [], particles = [];
     let score = 0, fuel = 100, lives = 3, gameActive = false, bossActive = false;
     let comboCount = 0, comboTimer = 0, difficulty = 1, distance = 0, highScore = parseInt(localStorage.getItem('starBlasterHigh') || '0');
-    let lastShootTime = 0, lastBombTime = 0, lastBossSpawn = 0, lastFuelSpawn = 0, lastEnemySpawn = 0, shakeTime = 0, flashTime = 0;
+    let lastShootTime = 0, lastBombTime = 0, lastBossSpawn = 0, lastFuelSpawn = 0, lastEnemySpawn = 0, lastPowerupSpawn = 0;
+    let shakeTime = 0, flashTime = 0;
     let touchLeft = false, touchRight = false, touchShoot = false, touchBomb = false;
     let keys = {};
     let scavActive = false, solvalou = null, groundEnemies = [], missileWarnings = [];
@@ -181,6 +183,7 @@ Iteration 40: Added ground terrain details with buildings and water
     let scorePopups = [];
     let titleStarAnim = [];
     let weaponLevel = 1, shieldActive = false, shieldTimer = 0;
+    let markGraphics = []; // Reusable mark indicators
 
     const config = {
       type: Phaser.AUTO, parent: 'game-container',
@@ -216,13 +219,13 @@ Iteration 40: Added ground terrain details with buildings and water
       if (time - lastEnemySpawn > 1600 / difficulty) { spawnEnemy(this); lastEnemySpawn = time; }
       if (time - lastBossSpawn > 45000) { spawnBoss(this); lastBossSpawn = time; }
       if (time - lastFuelSpawn > 10000) { spawnFuel(this); lastFuelSpawn = time; }
-      if (time - lastFuelSpawn > 15000) { spawnPowerup(this); lastFuelSpawn = time; } // Iter 24: Power-ups
+      if (time - lastPowerupSpawn > 15000) { spawnPowerup(this); lastPowerupSpawn = time; }
       updatePlayer(this, time, delta);
       updateBullets(this, delta);
       updateEnemies(this, delta);
       updateEnemyBullets(this, delta);
       updateFuelPickups(this, delta);
-      updatePowerups(this, delta); // Iter 24
+      updatePowerups(this, delta);
       updateTerrain(this, delta);
       updateGroundEnemies(this, delta);
       updateParticles(this, delta);
@@ -237,7 +240,7 @@ Iteration 40: Added ground terrain details with buildings and water
       distance += delta / 1000;
       if (shakeTime > 0) shakeTime -= delta;
       if (flashTime > 0) flashTime -= delta;
-      // Iter 25: Shield timer
+      // Shield timer
       if (shieldActive) {
         shieldTimer -= delta;
         if (shieldTimer <= 0) shieldActive = false;
@@ -246,7 +249,7 @@ Iteration 40: Added ground terrain details with buildings and water
       updateMissileWarnings(this);
     }
 
-    // ================== TITLE SCREEN (Iter 22) ==================
+    // ================== TITLE SCREEN ==================
     function showTitleScreen(scene) {
       const w = scene.scale.width, h = scene.scale.height;
       const bg = scene.add.graphics(); bg.fillStyle(0x000033, 1); bg.fillRect(0, 0, w, h);
@@ -322,11 +325,9 @@ Iteration 40: Added ground terrain details with buildings and water
       }
     }
 
-    // ================== PAUSE OVERLAY (Iter 21) ==================
+    // ================== PAUSE OVERLAY ==================
     function togglePauseOverlay(scene, visible) {
-      let overlay = scene.getObjectAt ? scene.getObjectAt(0, Phaser.GameObjects.Graphics) : null;
       let pauseText = null;
-      // Find existing pause overlay by checking for a graphics at specific depth
       if (scene._pauseOverlay) {
         pauseText = scene._pauseOverlay;
       } else {
@@ -408,19 +409,22 @@ Iteration 40: Added ground terrain details with buildings and water
 
     // ================== START GAME ==================
     function startGame(scene) {
-      scene.children.removeAll(); scene.input.removeAllListeners();
+      // Clear only game objects, not HUD/controls/keyboard
+      scene.children.removeAll();
       AudioSystem.stopMusic();
       addTouchControls(scene);
+      addHUD(scene);
       player = createPlayer(scene);
       createTerrain(scene);
       gameActive = true; isPaused = false;
       score = 0; fuel = 100; lives = 3; comboCount = 0; distance = 0;
-      lastBossSpawn = lastFuelSpawn = lastEnemySpawn = lastWaveTime = 0;
+      lastBossSpawn = lastFuelSpawn = lastEnemySpawn = lastPowerupSpawn = lastWaveTime = 0;
       waveNum = 0; waveAnnounceTimer = 0;
       scavActive = false; solvalou = null; groundEnemies = []; missileWarnings = [];
       bullets = []; enemies = []; enemyBullets = []; fuelPickups = []; particles = [];
       scorePopups = []; invincibleUntil = 0;
       scavGraphics = scene.add.graphics(); scavGraphics.setDepth(55); scavGraphics.setVisible(false);
+      markGraphics = [];
       AudioSystem.startMusic();
     }
 
@@ -428,6 +432,8 @@ Iteration 40: Added ground terrain details with buildings and water
     function createPlayer(scene) {
       const w = scene.scale.width, h = scene.scale.height, px = w / 2, py = h - 120;
       const ship = scene.add.graphics();
+      ship.x = px;
+      ship.y = py;
       ship.fillStyle(0xcccccc, 1); ship.lineStyle(2, 0x888888, 1);
       ship.fillRect(px - 8, py - 25, 16, 45); ship.strokeRect(px - 8, py - 25, 16, 45);
       ship.fillStyle(0xaaaaaa, 1);
@@ -438,8 +444,10 @@ Iteration 40: Added ground terrain details with buildings and water
       ship.strokeTriangle(px + 8, py - 5, px + 28, py + 15, px + 8, py + 15);
       ship.fillStyle(0x00ff88, 0.7); ship.fillCircle(px, py - 15, 5);
       const engine = scene.add.graphics();
-      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(px - 5, py + 22, 10, 8);
-      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(px - 3, py + 28, 6, 6);
+      engine.x = px - 5;
+      engine.y = py + 22;
+      engine.fillStyle(0x00ff00, 0.9); engine.fillRect(0, 0, 10, 8);
+      engine.fillStyle(0x88ff88, 0.6); engine.fillRect(0, 0, 6, 6);
       ship.data = { type: 'player', health: 1, engine: engine }; engine.setData('parent', ship);
       scene.tweens.add({ targets: engine, alpha: 0.4, duration: 120, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       return ship;
@@ -447,7 +455,7 @@ Iteration 40: Added ground terrain details with buildings and water
 
     function updatePlayer(scene, time, delta) {
       const w = scene.scale.width;
-      // Iter 14: Solvalou takes input when active
+      // Solvalou takes input when active
       if (solvalou) {
         if (touchLeft) player.x = Math.max(30, player.x - 5 * delta / 16);
         if (touchRight) player.x = Math.min(w - 30, player.x + 5 * delta / 16);
@@ -457,20 +465,19 @@ Iteration 40: Added ground terrain details with buildings and water
       }
       if ((touchShoot || keys[' ']) && time - lastShootTime > 150) { shootBullet(scene); lastShootTime = time; }
       if ((touchBomb || keys['b'] || keys['B']) && time - lastBombTime > 500) { dropBomb(scene); lastBombTime = time; }
-      // Scav scanner - persistent object (Iter 13)
+      // Scav scanner - persistent object
       if (scavGraphics) {
         if (scavActive) {
           scavGraphics.clear();
           scavGraphics.lineStyle(2, 0x00ffff, 0.8);
           scavGraphics.strokeRect(player.x - 40, scene.scale.height - 95, 80, 10);
           scavGraphics.setVisible(true);
-          // Iter 15: Mark ground enemies under scav
           markGroundEnemies(scene);
         } else {
           scavGraphics.setVisible(false);
         }
       }
-      // Iter 25: Shield visual
+      // Shield visual
       if (shieldActive) {
         if (!player.shield) {
           player.shield = scene.add.graphics();
@@ -485,7 +492,7 @@ Iteration 40: Added ground terrain details with buildings and water
         scene.children.remove(player.shield);
         player.shield = null;
       }
-      // Invincibility flash (Iter 17)
+      // Invincibility flash
       if (time < invincibleUntil) {
         player.setAlpha(Math.sin(time / 60) > 0 ? 0.3 : 1);
       } else {
@@ -512,10 +519,10 @@ Iteration 40: Added ground terrain details with buildings and water
       });
     }
 
-    // ================== TERRAIN (Iter 3 + Iter 20 details) ==================
+    // ================== TERRAIN ==================
     function createTerrain(scene) {
       const w = scene.scale.width, h = scene.scale.height;
-      // Iter 20: Varied ground with buildings/water
+      // Ground
       const ground = scene.add.graphics();
       ground.fillStyle(0x2d5016, 1); ground.fillRect(0, h - 100, w, 100);
       terrain.push({ obj: ground, speed: 2.2, parallax: 1 });
@@ -581,15 +588,17 @@ Iteration 40: Added ground terrain details with buildings and water
       updateStarfield(scene, delta);
     }
 
-    // ================== SOLVALOU (Iter 5, fixed Iter 14) ==================
+    // ================== SOLVALOU ==================
     function toggleSolvalou(scene) {
       if (solvalou) {
         scene.children.remove(solvalou); solvalou = null;
       } else {
         const w = scene.scale.width, h = scene.scale.height;
         solvalou = scene.add.graphics();
+        solvalou.x = player.x;
+        solvalou.y = player.y - 70;
         solvalou.fillStyle(0x00aaff, 1);
-        solvalou.fillTriangle(player.x - 10, player.y - 60, player.x, player.y - 85, player.x + 10, player.y - 60);
+        solvalou.fillTriangle(solvalou.x - 10, solvalou.y - 25, solvalou.x, solvalou.y - 50, solvalou.x + 10, solvalou.y - 25);
         solvalou.data = { type: 'solvalou', x: player.x, y: player.y - 70, vx: 0 };
         scene.add.tween({ targets: solvalou, alpha: { from: 0.6, to: 1 }, duration: 80, yoyo: true, repeat: 2 });
       }
@@ -597,18 +606,21 @@ Iteration 40: Added ground terrain details with buildings and water
     function updateSolvalou(scene, delta) {
       if (!solvalou) return;
       const data = solvalou.data;
-      // Iter 14: Solvalou only uses a/d or left/right when solvalou is active
-      data.x += (keys['a'] ? -3.5 : keys['d'] ? 3.5 : (solvalou && keys['ArrowLeft'] ? -3.5 : keys['ArrowRight'] ? 3.5 : 0)) * delta / 16;
+      // Solvalou moves with arrow keys
+      if (keys['ArrowLeft'] || keys['a']) data.x -= 3.5 * delta / 16;
+      if (keys['ArrowRight'] || keys['d']) data.x += 3.5 * delta / 16;
       data.x = Math.max(40, Math.min(scene.scale.width - 40, data.x));
       solvalou.x = data.x; solvalou.y = data.y;
+      // Auto-fire
       if (Math.random() < 0.04) {
-        const b = scene.add.graphics(); b.fillStyle(0x00ffff, 1); b.fillCircle(data.x, data.y - 8, 2);
+        const b = scene.add.graphics(); b.x = data.x; b.y = data.y - 8;
+        b.fillStyle(0x00ffff, 1); b.fillCircle(0, 0, 2);
         b.data = { type: 'solvalouBullet', speed: 9 }; bullets.push(b);
       }
       if (data.y < 40) { scene.children.remove(solvalou); solvalou = null; }
     }
 
-    // ================== ENEMIES (Iter 7+8) ==================
+    // ================== ENEMIES ==================
     function spawnEnemy(scene) {
       const w = scene.scale.width, h = scene.scale.height;
       const typeRoll = Math.random();
@@ -620,6 +632,7 @@ Iteration 40: Added ground terrain details with buildings and water
       else type = 'boss';
       const px = w / 2 + (Math.random() - 0.5) * (w * 0.65), py = -35;
       const enemy = scene.add.graphics();
+      enemy.x = px; enemy.y = py;
       let data = { type: 'enemy', health: 1, speed: 2.1, shootChance: 0.0012, points: 100, vx: 0 };
       if (type === 'fighter') {
         enemy.fillStyle(0xcc0000, 1); enemy.lineStyle(2, 0xff3333, 1);
@@ -643,7 +656,6 @@ Iteration 40: Added ground terrain details with buildings and water
         enemy.fillStyle(0x440000, 1); enemy.lineStyle(4, 0xff2222, 1);
         enemy.fillRect(px - 28, py - 18, 56, 38); enemy.strokeRect(px - 28, py - 18, 56, 38);
         enemy.fillStyle(0xffff00, 0.9); enemy.fillCircle(px, py, 10); enemy.strokeCircle(px, py, 10);
-        // Weak points on sides
         enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px - 22, py - 10, 5); enemy.strokeCircle(px - 22, py - 10, 5);
         enemy.fillStyle(0xff6600, 0.8); enemy.fillCircle(px + 22, py - 10, 5); enemy.strokeCircle(px + 22, py - 10, 5);
         data.health = 14; data.speed = 0.6; data.shootChance = 0.014; data.points = 1400;
@@ -651,6 +663,11 @@ Iteration 40: Added ground terrain details with buildings and water
         bossActive = true;
       }
       enemy.setData('type', type); enemy.setData('health', data.health); enemy.data = data; enemies.push(enemy);
+    }
+
+    // ================== BOSS SPAWNER (FIXED - was undefined) ==================
+    function spawnBoss(scene) {
+      spawnEnemy(scene);
     }
 
     function spawnGroundEnemy(scene) {
@@ -673,12 +690,11 @@ Iteration 40: Added ground terrain details with buildings and water
     }
 
     function markGroundEnemies(scene) {
-      // Iter 15: Mark ground enemies under scav scanner
       const sx = player.x, sy = scene.scale.height - 90;
       groundEnemies.forEach(ge => {
         if (Math.abs(ge.x - sx) < 50 && Math.abs(ge.y - sy) < 30) {
           ge.data.marked = true;
-          ge.data.markTimer = 3000; // 3 seconds to bomb marked
+          ge.data.markTimer = 3000;
         }
       });
     }
@@ -690,12 +706,15 @@ Iteration 40: Added ground terrain details with buildings and water
         // Mark timer
         if (ge.data.marked) {
           ge.data.markTimer -= delta;
-          // Draw mark indicator
-          const markG = scene.add.graphics();
-          markG.lineStyle(1, 0xff00ff, 0.8);
-          markG.strokeCircle(ge.x + 8, ge.y - 5, 12);
-          setTimeout(() => scene.children.remove(markG), 100);
-          if (ge.data.markTimer <= 0) ge.data.marked = false;
+          // Use reusable mark graphics (FIXED: was creating new graphics every frame)
+          if (!ge.markIndicator) {
+            ge.markIndicator = scene.add.graphics();
+            ge.markIndicator.lineStyle(1, 0xff00ff, 0.8);
+            ge.markIndicator.setDepth(56);
+          }
+          ge.markIndicator.clear();
+          ge.markIndicator.strokeCircle(ge.x + 8, ge.y - 5, 12);
+          if (ge.data.markTimer <= 0) { ge.data.marked = false; scene.children.remove(ge.markIndicator); ge.markIndicator = null; }
         }
         if (Math.random() < 0.006 && ge.data.gtype === 'launcher') {
           const mb = scene.add.graphics(); mb.fillStyle(0xff4400, 1); mb.fillCircle(ge.x + 8, ge.y - 6, 3);
@@ -705,7 +724,7 @@ Iteration 40: Added ground terrain details with buildings and water
         if (ge.x < 20 || ge.x > scene.scale.width - 20) ge.data.speed *= -1;
         if (Math.random() < 0.0008) { scene.children.remove(ge); groundEnemies.splice(i, 1); }
       }
-      // Periodically spawn ground enemies (Iter 7)
+      // Periodically spawn ground enemies
       if (Math.random() < 0.002 * difficulty) spawnGroundEnemy(scene);
     }
 
@@ -719,7 +738,8 @@ Iteration 40: Added ground terrain details with buildings and water
         }
         if (data.type === 'bomber' && Math.random() < data.shootChance * delta / 16 * 1.3) {
           const leadX = player.x + (player.x - enemy.x) * 0.3;
-          const b = scene.add.graphics(); b.fillStyle(0xff0000, 1); b.fillCircle(enemy.x, enemy.y + 12, 3);
+          const b = scene.add.graphics(); b.x = enemy.x; b.y = enemy.y + 12;
+          b.fillStyle(0xff0000, 1); b.fillCircle(0, 0, 3);
           b.data = { type: 'enemyBullet', speed: 3.8, vx: (leadX - enemy.x) * 0.025 }; enemyBullets.push(b);
         } else if (Math.random() < data.shootChance * delta / 16) {
           enemyShoot(scene, enemy);
@@ -732,7 +752,8 @@ Iteration 40: Added ground terrain details with buildings and water
 
     function enemyShoot(scene, enemy) {
       const bullet = scene.add.graphics();
-      bullet.fillStyle(0xff0000, 1); bullet.fillCircle(enemy.x, enemy.y, 3);
+      bullet.x = enemy.x; bullet.y = enemy.y;
+      bullet.fillStyle(0xff0000, 1); bullet.fillCircle(0, 0, 3);
       bullet.data = { type: 'enemyBullet', speed: 4, vx: 0 }; enemyBullets.push(bullet);
     }
 
@@ -745,27 +766,32 @@ Iteration 40: Added ground terrain details with buildings and water
       }
     }
 
-    // ================== BULLETS (Iter 6 + Iter 18 trails) ==================
+    // ================== BULLETS ==================
     function shootBullet(scene) {
       const bullet = scene.add.graphics();
-      bullet.fillStyle(0x00ff00, 1); bullet.fillCircle(player.x, player.y - 30, 3);
+      bullet.x = player.x; bullet.y = player.y - 30;
+      bullet.fillStyle(0x00ff00, 1); bullet.fillCircle(0, 0, 3);
       bullet.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
       bullets.push(bullet); AudioSystem.playShoot();
       
-      // Iter 23: Weapon upgrade system
+      // Weapon upgrade system
       if (weaponLevel >= 2) {
-        const b2 = scene.add.graphics(); b2.fillStyle(0x00ff00, 1); b2.fillCircle(player.x - 12, player.y - 25, 2.5);
+        const b2 = scene.add.graphics(); b2.x = player.x - 12; b2.y = player.y - 25;
+        b2.fillStyle(0x00ff00, 1); b2.fillCircle(0, 0, 2.5);
         b2.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
         bullets.push(b2);
-        const b3 = scene.add.graphics(); b3.fillStyle(0x00ff00, 1); b3.fillCircle(player.x + 12, player.y - 25, 2.5);
+        const b3 = scene.add.graphics(); b3.x = player.x + 12; b3.y = player.y - 25;
+        b3.fillStyle(0x00ff00, 1); b3.fillCircle(0, 0, 2.5);
         b3.data = { type: 'bullet', speed: 8, trail: true, trailColor: 0x00ff00 };
         bullets.push(b3);
       }
       if (weaponLevel >= 3) {
-        const b4 = scene.add.graphics(); b4.fillStyle(0x00ff00, 1); b4.fillCircle(player.x - 20, player.y - 20, 2);
+        const b4 = scene.add.graphics(); b4.x = player.x - 20; b4.y = player.y - 20;
+        b4.fillStyle(0x00ff00, 1); b4.fillCircle(0, 0, 2);
         b4.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: -0.5 };
         bullets.push(b4);
-        const b5 = scene.add.graphics(); b5.fillStyle(0x00ff00, 1); b5.fillCircle(player.x + 20, player.y - 20, 2);
+        const b5 = scene.add.graphics(); b5.x = player.x + 20; b5.y = player.y - 20;
+        b5.fillStyle(0x00ff00, 1); b5.fillCircle(0, 0, 2);
         b5.data = { type: 'bullet', speed: 7.5, trail: true, trailColor: 0x00ff00, vx: 0.5 };
         bullets.push(b5);
       }
@@ -773,7 +799,8 @@ Iteration 40: Added ground terrain details with buildings and water
 
     function dropBomb(scene) {
       const bomb = scene.add.graphics();
-      bomb.fillStyle(0xffff00, 1); bomb.fillCircle(player.x, player.y + 18, 5);
+      bomb.x = player.x; bomb.y = player.y + 18;
+      bomb.fillStyle(0xffff00, 1); bomb.fillCircle(0, 0, 5);
       bomb.data = { type: 'bomb', speed: 3.2, vx: (Math.random() - 0.5) * 0.6, trail: true, trailColor: 0xffff00 };
       bullets.push(bomb); AudioSystem.playBomb();
     }
@@ -783,22 +810,26 @@ Iteration 40: Added ground terrain details with buildings and water
         const bullet = bullets[i];
         bullet.y -= bullet.data.speed * delta / 16;
         if (bullet.data.vx) bullet.x += bullet.data.vx * delta / 16;
-        // Iter 18: Trail effect
-        if (bullet.data.trail && Math.random() < 0.5) {
+        // Trail effect (FIXED: proper Phaser graphics particles)
+        if (bullet.data.trail && Math.random() < 0.3) {
           const trail = scene.add.graphics();
+          trail.x = bullet.x + (Math.random() - 0.5) * 4;
+          trail.y = bullet.y + bullet.data.speed * delta / 16 * 0.5 + (Math.random() - 0.5) * 2;
           trail.fillStyle(bullet.data.trailColor || 0x88ff88, 0.4);
-          trail.fillCircle(bullet.x + (Math.random() - 0.5) * 4, bullet.y + bullet.data.speed * delta / 16 * 0.5 + (Math.random() - 0.5) * 2, 2);
-          particles.push({ x: trail.x, y: trail.y, vx: 0, vy: 0, life: 8, color: bullet.data.trailColor, size: 2, setData: function(){} });
+          trail.fillCircle(0, 0, 2);
+          trail.data = { life: 8 };
+          particles.push(trail);
         }
         if (bullet.y < -20) { scene.children.remove(bullet); bullets.splice(i, 1); }
       }
     }
 
-    // ================== PARTICLES (Iter 9) ==================
+    // ================== PARTICLES ==================
     function createExplosion(scene, x, y, color = 0xffaa00) {
       for (let i = 0; i < 14; i++) {
         const p = scene.add.graphics();
-        p.fillStyle(color, 0.9); p.fillCircle(x, y, 2 + Math.random() * 3);
+        p.x = x; p.y = y;
+        p.fillStyle(color, 0.9); p.fillCircle(0, 0, 2 + Math.random() * 3);
         p.data = { vx: (Math.random() - 0.5) * 4.5, vy: (Math.random() - 0.5) * 4.5 - 1, life: 18 + Math.random() * 14 };
         particles.push(p);
       }
@@ -808,21 +839,24 @@ Iteration 40: Added ground terrain details with buildings and water
     function updateParticles(scene, delta) {
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        if (p.setData) {
+        if (p.data && p.data.vx !== undefined) {
           // Real Phaser graphics particle
           p.x += p.data.vx * delta / 16; p.y += p.data.vy * delta / 16;
           p.data.life -= delta / 16; p.setAlpha(Math.max(0.1, p.data.life / 22));
           if (p.data.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
+        } else if (p.data && p.data.life !== undefined) {
+          // Trail particle
+          p.setAlpha(p.data.life / 8);
+          p.data.life -= delta / 16;
+          if (p.data.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
         } else {
-          // Trail particle (simple)
-          p.x += p.vx * delta / 16; p.y += p.vy * delta / 16;
-          p.life -= delta / 16;
-          if (p.life <= 0) { scene.children.remove(p); particles.splice(i, 1); }
+          // Fallback - remove
+          scene.children.remove(p); particles.splice(i, 1);
         }
       }
     }
 
-    // ================== SCORE POPUPS (Iter 19) ==================
+    // ================== SCORE POPUPS ==================
     function addScorePopup(scene, x, y, points) {
       const popup = scene.add.text(x, y, `+${points}`, {
         fontSize: '16px', fontFamily: 'Arial', color: '#ffff00', stroke: '#000000', strokeThickness: 2
@@ -849,24 +883,28 @@ Iteration 40: Added ground terrain details with buildings and water
 
     // ================== FUEL + SPAWN ==================
     function spawnFuel(scene) {
-      const f = scene.add.graphics(); f.fillStyle(0x00ffff, 0.6); f.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 9);
+      const f = scene.add.graphics();
+      f.x = Math.random() * (scene.scale.width - 50) + 25;
+      f.y = -18;
+      f.fillStyle(0x00ffff, 0.6); f.fillCircle(0, 0, 9);
       f.data = { type: 'fuel' }; fuelPickups.push(f);
     }
     
-    // Iter 24: Power-up spawning
     function spawnPowerup(scene) {
       const types = ['weapon', 'life', 'shield'];
       const type = types[Math.floor(Math.random() * types.length)];
       const p = scene.add.graphics();
+      p.x = Math.random() * (scene.scale.width - 50) + 25;
+      p.y = -18;
       if (type === 'weapon') {
-        p.fillStyle(0x00ff00, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0x00ff00, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
+        p.fillStyle(0x00ff00, 0.8); p.fillCircle(0, 0, 10);
+        p.lineStyle(2, 0x00ff00, 0.6); p.strokeCircle(0, 0, 10);
       } else if (type === 'life') {
-        p.fillStyle(0xff00ff, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0xff00ff, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
+        p.fillStyle(0xff00ff, 0.8); p.fillCircle(0, 0, 10);
+        p.lineStyle(2, 0xff00ff, 0.6); p.strokeCircle(0, 0, 10);
       } else {
-        p.fillStyle(0x0088ff, 0.8); p.fillCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
-        p.lineStyle(2, 0x0088ff, 0.6); p.strokeCircle(Math.random() * (scene.scale.width - 50) + 25, -18, 10);
+        p.fillStyle(0x0088ff, 0.8); p.fillCircle(0, 0, 10);
+        p.lineStyle(2, 0x0088ff, 0.6); p.strokeCircle(0, 0, 10);
       }
       p.data = { type: 'powerup', powerupType: type };
       powerups.push(p);
@@ -889,7 +927,7 @@ Iteration 40: Added ground terrain details with buildings and water
             addScorePopup(scene, p.x, p.y, '+1 LIFE!');
           } else if (p.data.powerupType === 'shield') {
             shieldActive = true;
-            shieldTimer = 8000; // 8 seconds
+            shieldTimer = 8000;
             AudioSystem.playFuelPickup();
             addScorePopup(scene, p.x, p.y, 'SHIELD!');
           }
@@ -899,7 +937,7 @@ Iteration 40: Added ground terrain details with buildings and water
       }
     }
 
-    // ================== COLLISIONS + WARNINGS ==================
+    // ================== COLLISIONS ==================
     function checkCollisions(scene) {
       // Bullets vs enemies
       for (let i = bullets.length - 1; i >= 0; i--) {
@@ -915,30 +953,21 @@ Iteration 40: Added ground terrain details with buildings and water
               scene.children.remove(enemy); enemies.splice(j, 1);
               comboCount++; comboTimer = 2200;
               if (enemy.data.type === 'boss') bossActive = false;
-              // Iter 24: Drop power-up chance
+              // Drop power-up chance
               if (Math.random() < 0.15) spawnPowerup(scene);
             }
             break;
           }
-          // Iter 28: Shield blocks enemy bullets
-          if (enemy.data.type === 'boss' && Math.abs(bullet.x - enemy.x) < 30 && Math.abs(bullet.y - enemy.y) < 30) {
-            if (shieldActive) {
-              scene.children.remove(bullet); bullets.splice(i, 1);
-              createExplosion(scene, bullet.x, bullet.y, 0x0088ff);
-              AudioSystem.playHit();
-              break;
-            }
-          }
         }
       }
-      // Iter 15: Scav marks + double damage on bombs
+      // Scav marks + double damage on bombs
       for (let i = groundEnemies.length - 1; i >= 0; i--) {
         const ge = groundEnemies[i];
         for (let k = bullets.length - 1; k >= 0; k--) {
           const b = bullets[k];
           if (b.data.type === 'bomb' && Math.abs(b.x - ge.x) < 18 && Math.abs(b.y - ge.y) < 18) {
             ge.data.health--;
-            if (ge.data.marked) { ge.data.health--; } // double damage when marked
+            if (ge.data.marked) { ge.data.health--; }
             scene.children.remove(b); bullets.splice(k, 1);
             if (ge.data.health <= 0) {
               score += ge.data.points; AudioSystem.playExplosion();
@@ -951,7 +980,7 @@ Iteration 40: Added ground terrain details with buildings and water
           }
         }
       }
-      // Iter 28: Shield blocks enemy bullets
+      // Shield blocks enemy bullets
       for (let i = enemyBullets.length - 1; i >= 0; i--) {
         const bullet = enemyBullets[i];
         if (shieldActive && Math.abs(bullet.x - player.x) < 30 && Math.abs(bullet.y - player.y) < 30) {
@@ -961,12 +990,12 @@ Iteration 40: Added ground terrain details with buildings and water
           continue;
         }
         const time = game.time.now;
-        if (time < invincibleUntil) continue; // Iter 17: invincibility
+        if (time < invincibleUntil) continue;
         if (Math.abs(bullet.x - player.x) < 20 && Math.abs(bullet.y - player.y) < 26) {
           AudioSystem.playHit(); scene.children.remove(bullet); enemyBullets.splice(i, 1); loseLife(scene); break;
         }
       }
-      // Player collisions
+      // Player collisions with enemies
       for (let i = enemies.length - 1; i >= 0; i--) {
         const enemy = enemies[i];
         const time = game.time.now;
@@ -994,7 +1023,7 @@ Iteration 40: Added ground terrain details with buildings and water
 
     function loseLife(scene) {
       lives--;
-      invincibleUntil = game.time.now + 1500; // Iter 17: 1.5s invincibility
+      invincibleUntil = game.time.now + 1500;
       shakeTime = 520; flashTime = 340;
       if (lives <= 0) gameOver(scene);
     }
@@ -1031,8 +1060,9 @@ Iteration 40: Added ground terrain details with buildings and water
       }); restartText.setOrigin(0.5); restartText.setDepth(100);
       restartText.setInteractive({ useHandCursor: true });
       restartText.on('pointerdown', () => {
-        scene.children.removeAll(); scene.input.removeAllListeners();
-        addTouchControls(scene); showTitleScreen(scene);
+        // Don't remove ALL children - keep HUD and keyboard
+        AudioSystem.stopMusic();
+        startGame(scene);
       });
     }
 
