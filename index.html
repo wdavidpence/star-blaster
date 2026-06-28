@@ -598,7 +598,7 @@ Iteration 41: FIXED - spawnBoss undefined, player position, HUD persistence, mem
         solvalou.x = player.x;
         solvalou.y = player.y - 70;
         solvalou.fillStyle(0x00aaff, 1);
-        solvalou.fillTriangle(solvalou.x - 10, solvalou.y - 25, solvalou.x, solvalou.y - 50, solvalou.x + 10, solvalou.y - 25);
+        solvalou.fillTriangle(-10, -25, 0, -50, 10, -25);
         solvalou.data = { type: 'solvalou', x: player.x, y: player.y - 70, vx: 0 };
         scene.add.tween({ targets: solvalou, alpha: { from: 0.6, to: 1 }, duration: 80, yoyo: true, repeat: 2 });
       }
