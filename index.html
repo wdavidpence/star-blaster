@@ -355,102 +355,59 @@ v4.7: Complete rewrite — fix scene lifecycle, proper Phaser positioning, canva
 
     // ================== TITLE SCREEN (Mobile-friendly) ==================
     function showTitleScreen(scene) {
-      // Add game-level input handler instead of object-based - most reliable for mobile
-      scene.input.on('pointerdown', function(event) {
-        // Skip if game is already active
-        if (gameActive || isPaused) return;
-        
-        // Try to start the game
-        try {
-          AudioSystem.init();
-          AudioSystem.resume();
-          startGame(scene);
-        } catch(e) {
-          console.error('Title screen start error:', e);
+      // Create a DOM overlay that covers the entire canvas - most reliable for mobile
+      const container = document.getElementById('game-container');
+      const titleOverlay = document.createElement('div');
+      titleOverlay.id = 'title-overlay';
+      titleOverlay.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 24, 0.9);
+        cursor: pointer;
+        touch-action: none;
+      `;
+      
+      // Add title text to overlay
+      const titleDiv = document.createElement('div');
+      titleDiv.innerHTML = `
+        <div style="text-align: center; pointer-events: none;">
+          <div style="font-size: 56px; font-family: Arial Black, Arial; font-weight: bold; color: #00ff44; text-shadow: 0 0 10px #003322, 0 0 20px #003322; margin-bottom: 10px;">STAR BLASTER</div>
+          <div style="font-size: 18px; color: #00ffff; margin-bottom: 20px;">Xevious-Style Arcade Shooter</div>
+          <div style="font-size: 14px; color: #cccccc; margin-bottom: 30px;">← → to move | Tap top-left: shoot<br>Tap bottom: bomb | Collect FUEL!</div>
+          <div style="font-size: 42px; font-family: Arial Black, Arial; font-weight: bold; color: #00ff88; text-shadow: 0 0 15px #003322, 0 0 25px #003322; animation: pulse 1.2s ease-in-out infinite;">TAP TO START</div>
+          <div style="font-size: 18px; color: #ffff00; margin-top: 20px;">HIGH SCORE: ${highScore}</div>
+        </div>
+      `;
+      
+      titleOverlay.appendChild(titleDiv);
+      container.appendChild(titleOverlay);
+
+      // Pulse animation for the start button
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes pulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.08); }
         }
-      });
+      `;
+      document.head.appendChild(style);
 
-      // Title animation
-      const title = scene.add.text(
-        scene.scale.width / 2, 
-        scene.scale.height * 0.3 - 50,
-        'STAR BLASTER', {
-          fontSize: '56px',
-          fontFamily: 'Arial Black, Arial',
-          fontStyle: 'bold',
-          color: '#00ff44',
-          stroke: '#003322',
-          strokeThickness: 8,
-          align: 'center'
-        }
-      );
-      title.setOrigin(0.5);
+      // Handle taps - most reliable for mobile
+      titleOverlay.addEventListener('pointerdown', startGameMobile);
+      titleOverlay.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        startGameMobile();
+      }, { passive: false });
+      titleOverlay.addEventListener('click', startGameMobile);
 
-      // Subtitle
-      const sub = scene.add.text(
-        scene.scale.width / 2,
-        scene.scale.height * 0.3 + 5,
-        'Xevious-Style Arcade Shooter', {
-          fontSize: '18px',
-          fontFamily: 'Arial',
-          color: '#00ffff'
-        }
-      );
-      sub.setOrigin(0.5);
-
-      // Instructions for mobile
-      const instr = scene.add.text(
-        scene.scale.width / 2,
-        scene.scale.height * 0.5 + 60,
-        '← → to move | Tap top-left: shoot\nTap bottom: bomb | Collect FUEL!', {
-          fontSize: '14px',
-          fontFamily: 'Arial',
-          color: '#cccccc',
-          align: 'center'
-        }
-      );
-      instr.setOrigin(0.5);
-
-      // Big pulsing start button with clear border
-      const startBtn = scene.add.text(
-        scene.scale.width / 2,
-        scene.scale.height * 0.75,
-        'TAP TO START', {
-          fontSize: '42px',
-          fontFamily: 'Arial Black, Arial',
-          fontStyle: 'bold',
-          color: '#00ff88',
-          stroke: '#003322',
-          strokeThickness: 10,
-          align: 'center'
-        }
-      );
-      startBtn.setOrigin(0.5);
-
-      // Animate the button to pulse larger
-      scene.tweens.add({
-        targets: startBtn,
-        scaleX: 1.08,
-        scaleY: 1.08,
-        duration: 1200,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
-
-      // High score
-      const highText = scene.add.text(
-        scene.scale.width / 2,
-        scene.scale.height * 0.85,
-        'HIGH SCORE: ' + highScore, {
-          fontSize: '18px',
-          fontFamily: 'Arial',
-          color: '#ffff00'
-        }
-      );
-      highText.setOrigin(0.5);
-
-      // Add twinkling stars to background (non-interactive)
+      // Animate background stars with Phaser
       const starGroup = [];
       for (let i = 0; i < 120; i++) {
         const s = scene.add.graphics();
@@ -459,8 +416,6 @@ v4.7: Complete rewrite — fix scene lifecycle, proper Phaser positioning, canva
         s.fillRect(Math.random() * scene.scale.width, Math.random() * scene.scale.height, sz, sz);
         starGroup.push({ s: s, speed: 0.3 + Math.random() * 0.8 });
       }
-
-      // Animate stars drifting
       scene.tweens.add({
         targets: starGroup.map(s => s.s),
         y: '+=8',
@@ -469,6 +424,22 @@ v4.7: Complete rewrite — fix scene lifecycle, proper Phaser positioning, canva
         repeat: -1,
         ease: 'Sine.easeInOut'
       });
+
+      // Store reference for cleanup
+      scene._titleOverlay = titleOverlay;
+    }
+
+    // Standalone start function for mobile overlay
+    function startGameMobile(scene) {
+      if (gameActive || isPaused) return;
+      
+      try {
+        AudioSystem.init();
+        AudioSystem.resume();
+        startGame(scene);
+      } catch(e) {
+        console.error('Title screen start error:', e);
+      }
     }
 
     // ================== TOUCH CONTROLS ==================
