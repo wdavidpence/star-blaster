@@ -355,70 +355,119 @@ v4.7: Complete rewrite — fix scene lifecycle, proper Phaser positioning, canva
 
     // ================== TITLE SCREEN (Mobile-friendly) ==================
     function showTitleScreen(scene) {
-      // Wait a tick for scale to be ready
-      scene.time.addEvent({
-        delay: 50,
-        loop: false,
-        callback: function() {
-          const w = scene.scale.width || window.innerWidth;
-          const h = scene.scale.height || window.innerHeight;
-          
-          // Full-screen start area (tappable anywhere)
-          const startArea = scene.add.rectangle(w/2, h/2 - 50, w, h, 0x000000, 0);
-          startArea.setInteractive({ useHandCursor: true });
-          startArea.on('pointerdown', () => {
-            AudioSystem.init(); AudioSystem.resume(); startGame(scene);
-          });
-          startArea.setDepth(90);
+      // Add game-level input handler instead of object-based - most reliable for mobile
+      scene.input.on('pointerdown', function(event) {
+        // Skip if game is already active
+        if (gameActive || isPaused) return;
+        
+        // Try to start the game
+        try {
+          AudioSystem.init();
+          AudioSystem.resume();
+          startGame(scene);
+        } catch(e) {
+          console.error('Title screen start error:', e);
+        }
+      });
 
-          // Animated star background
-          titleStarAnim = [];
-          for (let i = 0; i < 150; i++) {
-            const s = scene.add.graphics();
-            const sz = 1 + Math.random() * 2.5;
-            s.fillStyle(0xffffff, 0.3 + Math.random() * 0.7);
-            s.fillRect(Math.random()*w, Math.random()*h, sz, sz);
-            s.setData('speed', 0.5 + Math.random() * 1.2);
-            titleStarAnim.push(s);
-          }
-          scene.tweens.add({ targets: titleStarAnim, y: '+=10', duration: 3000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      // Title animation
+      const title = scene.add.text(
+        scene.scale.width / 2, 
+        scene.scale.height * 0.3 - 50,
+        'STAR BLASTER', {
+          fontSize: '56px',
+          fontFamily: 'Arial Black, Arial',
+          fontStyle: 'bold',
+          color: '#00ff44',
+          stroke: '#003322',
+          strokeThickness: 8,
+          align: 'center'
+        }
+      );
+      title.setOrigin(0.5);
 
-          // Title text
-          const title = scene.add.text(w/2, h/3 - 50, 'STAR BLASTER', {
-            fontSize: '48px', fontFamily: 'Arial', fontStyle: 'bold', color: '#00ff00',
-            stroke: '#000000', strokeThickness: 8, align: 'center'
-          }); title.setOrigin(0.5); title.setDepth(95);
-          scene.tweens.add({ targets: title, scaleX: 1.05, scaleY: 1.05, duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      // Subtitle
+      const sub = scene.add.text(
+        scene.scale.width / 2,
+        scene.scale.height * 0.3 + 5,
+        'Xevious-Style Arcade Shooter', {
+          fontSize: '18px',
+          fontFamily: 'Arial',
+          color: '#00ffff'
+        }
+      );
+      sub.setOrigin(0.5);
 
-          // Subtitle
-          const sub = scene.add.text(w/2, h/3 + 10, 'Xevious-Style Arcade Shooter', {
-            fontSize: '18px', fontFamily: 'Arial', color: '#00ffff', align: 'center'
-          }); sub.setOrigin(0.5); sub.setDepth(95);
+      // Instructions for mobile
+      const instr = scene.add.text(
+        scene.scale.width / 2,
+        scene.scale.height * 0.5 + 60,
+        '← → to move | Tap top-left: shoot\nTap bottom: bomb | Collect FUEL!', {
+          fontSize: '14px',
+          fontFamily: 'Arial',
+          color: '#cccccc',
+          align: 'center'
+        }
+      );
+      instr.setOrigin(0.5);
 
-          // Instructions (shorter for mobile)
-          const instr = scene.add.text(w/2, h/2 + 100, 'LEFT: Move  |  RIGHT: Move\nTOP LEFT: Shoot  |  BOTTOM: Bomb\nCOLLECT FUEL!', {
-            fontSize: '16px', fontFamily: 'Arial', color: '#ffffff', align: 'center'
-          }); instr.setOrigin(0.5); instr.setDepth(95);
+      // Big pulsing start button with clear border
+      const startBtn = scene.add.text(
+        scene.scale.width / 2,
+        scene.scale.height * 0.75,
+        'TAP TO START', {
+          fontSize: '42px',
+          fontFamily: 'Arial Black, Arial',
+          fontStyle: 'bold',
+          color: '#00ff88',
+          stroke: '#003322',
+          strokeThickness: 10,
+          align: 'center'
+        }
+      );
+      startBtn.setOrigin(0.5);
 
-          // High score
-          const highText = scene.add.text(w/2, h/2 + 170, `HIGH SCORE: ${highScore}`, {
-            fontSize: '18px', fontFamily: 'Arial', color: '#ffff00'
-          }); highText.setOrigin(0.5); highText.setDepth(95);
+      // Animate the button to pulse larger
+      scene.tweens.add({
+        targets: startBtn,
+        scaleX: 1.08,
+        scaleY: 1.08,
+        duration: 1200,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
 
-          // BIG start button - much easier to tap
-          const startBtn = scene.add.text(w/2, h/2 + 240, 'TAP TO START', {
-            fontSize: '36px', fontFamily: 'Arial', color: '#00ff00', stroke: '#000000', strokeThickness: 6
-          }); startBtn.setOrigin(0.5); startBtn.setDepth(95);
-          
-          // Add a visual pulsing effect to the button
-          scene.tweens.add({ targets: startBtn, scaleX: 1.15, scaleY: 1.15, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-          
-          // Restart interaction on the full start area, not just the button text
-          startArea.on('pointerdown', () => {
-            AudioSystem.init(); AudioSystem.resume(); startGame(scene);
-          });
-        },
-        callbackScope: scene
+      // High score
+      const highText = scene.add.text(
+        scene.scale.width / 2,
+        scene.scale.height * 0.85,
+        'HIGH SCORE: ' + highScore, {
+          fontSize: '18px',
+          fontFamily: 'Arial',
+          color: '#ffff00'
+        }
+      );
+      highText.setOrigin(0.5);
+
+      // Add twinkling stars to background (non-interactive)
+      const starGroup = [];
+      for (let i = 0; i < 120; i++) {
+        const s = scene.add.graphics();
+        s.fillStyle(0xffffff, 0.4 + Math.random() * 0.6);
+        const sz = 1 + Math.random() * 2;
+        s.fillRect(Math.random() * scene.scale.width, Math.random() * scene.scale.height, sz, sz);
+        starGroup.push({ s: s, speed: 0.3 + Math.random() * 0.8 });
+      }
+
+      // Animate stars drifting
+      scene.tweens.add({
+        targets: starGroup.map(s => s.s),
+        y: '+=8',
+        duration: 4000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
       });
     }
 
