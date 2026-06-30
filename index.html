@@ -1,11 +1,4 @@
-<!-- CHANGELOG
-v6.0: Refactored to Canvas 2D rendering (was broken DOM/CSS mess from v5.x)
-     - Touch input works on iOS (overlay div for audio unlock, canvas handles game)
-     - All game entities rendered via Canvas 2D with requestAnimationFrame
-     - Clean entity system: player, bullets, enemies (5 types + boss), powerups, fuel
-     - Enemy behaviors: zigzag, retreat, charge, circle, strafe
-     - Weapon upgrades, shield, bomb, fuel system, combo scoring
--->>
+<!-- v0.0.6 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -35,8 +28,9 @@ body{background:#000;overflow:hidden;touch-action:none;font-family:Arial,sans-se
 </style>
 </head>
 <body>
-<div id="overlay" onclick="startGame()">
+<div id="overlay">
   <div style="text-align:center">
+    <div style="font-size:10px;color:#555;margin-bottom:4px">v0.0.6</div>
     <h1>STAR BLASTER</h1>
     <div class="sub">Xevious-Style Arcade Shooter</div>
     <div class="ctrls">Swipe to move &bull; Shoot auto<br>Collect FUEL before it runs out</div>
@@ -51,7 +45,7 @@ body{background:#000;overflow:hidden;touch-action:none;font-family:Arial,sans-se
   <span id="lives" style="position:fixed;right:12px;top:8px;color:#f00;font-size:16px">♥ 3</span>
   <span id="combo" class="combo"></span>
 </div>
-<div id="gameover" onclick="startGame()">
+<div id="gameover">
   <div class="inner"><h2>GAME OVER</h2><div class="score-text">SCORE: <span id="fs">0</span></div><div class="restart">TAP TO RESTART</div></div>
 </div>
 <canvas id="gameCanvas"></canvas>
@@ -70,7 +64,7 @@ let invincibleUntil=0,shakeTime=0,dist=0,lastShoot=0;
 const keys={},touch={x:W/2,y:H/2,down:false,speed:5};
 
 // ===== ENTITIES =====
-let player=null,bullets=[],bulletsEnemy=[],powerups=[],fuelPickups=[],particles=[],popups=[];
+let player=null,bullets=[],bulletsEnemy=[],powerups=[],fuelPickups=[],particles=[],popups=[],enemies=[];
 
 // ===== AUDIO (Web Audio API) =====
 const Audio={
@@ -94,19 +88,13 @@ function starfield(){ctx.fillStyle='#fff';for(let i=0;i<120;i++){const x=(i*137.
 
 function drawPlayer(){
   if(!player)return;const{px,py}=player;
-  // Ship body
   ctx.fillStyle='#345';ctx.beginPath();ctx.moveTo(px,py-26);ctx.lineTo(px+10,py+24);ctx.lineTo(px+2,py+20);ctx.lineTo(px-2,py+20);ctx.lineTo(px-10,py+24);ctx.closePath();ctx.fill();
-  // Wings
   ctx.fillStyle='#234';ctx.beginPath();ctx.moveTo(px-10,py+8);ctx.lineTo(px-16,py+20);ctx.lineTo(px-4,py+18);ctx.closePath();ctx.fill();
   ctx.beginPath();ctx.moveTo(px+10,py+8);ctx.lineTo(px+16,py+20);ctx.lineTo(px+4,py+18);ctx.closePath();ctx.fill();
-  // Cockpit glow
   circle(px,py-8,3,'#0f8');
-  // Engine flame
   const f=6+Math.random()*4;ctx.fillStyle=`hsl(${25+Math.random()*15},100%,${50+Math.random()*30}%)`;
   ctx.beginPath();ctx.moveTo(px-4,py+20);ctx.lineTo(px,py+20+f);ctx.lineTo(px+4,py+20);ctx.fill();
-  // Shield
   if(shieldActive){ctx.strokeStyle='rgba(0,136,255,.4)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(px,py,28,0,Math.PI*2);ctx.stroke();}
-  // Invincibility flash
   if(Date.now()<invincibleUntil){ctx.strokeStyle='rgba(255,255,255,.3)';ctx.lineWidth=1;ctx.beginPath();ctx.arc(px,py,26,0,Math.PI*2);ctx.stroke()}
 }
 
@@ -131,32 +119,30 @@ function drawEnemy(e){
     ctx.fillStyle='#600';rect(x-10,y-4,10,20);rect(x+60,y-4,10,20);
     ctx.fillStyle='#f80';circle(x-30,y-8,6,'#f80');circle(x+30,y-8,6,'#f80');
     ctx.fillStyle='#ff0';circle(x,y,10,'#ff0');ctx.fillStyle='#f80';circle(x,y,4,'#f80');
-    // Health bar
-    const hp=d.health/d.maxHealth;ctx.fillStyle='#400';ctx.fillRect(x-32,y+22,64,4);ctx.fillStyle=hp>.5?'#0f0':hp>.25?'#ff0':'#f00';ctx.fillRect(x-32,y+22,64*hp,4);
+    const hp=d.hp/d.maxHp;ctx.fillStyle='#400';ctx.fillRect(x-32,y+22,64,4);ctx.fillStyle=hp>.5?'#0f0':hp>.25?'#ff0':'#f00';ctx.fillRect(x-32,y+22,64*hp,4);
   }
 }
 
 // ===== SPAWNING =====
-function spawnBullet(x,y,dir=-1){const b={x,y,vx:0,vy:8*dir,type:'player'};bullets.push(b)}
-function spawnEnemyBullet(x,y){const b={x,y,vx:(Math.random()-.5)*2,vy:3,type:'enemy'};bulletsEnemy.push(b)}
+function spawnBullet(x,y,dir=-1){bullets.push({x,y,vx:0,vy:8*dir,type:'player'})}
+function spawnEnemyBullet(x,y){bulletsEnemy.push({x,y,vx:(Math.random()-.5)*2,vy:3,type:'enemy'})}
 function spawnEnemy(x,y,type){
   const types={fighter:{hp:1,spd:3.4,pts:70,ch:.003},bomber:{hp:2,spd:1.7,pts:170,ch:.007},scout:{hp:1,spd:5.2,pts:90,ch:.002},armored:{hp:5,spd:1.2,pts:250,ch:.005},boss:{hp:14,spd:.6,pts:1400,ch:.014}};
-  const d=types[type]||types.fighter,maxHp=d.hp;
+  const d=types[type]||types.fighter;
   let beh='normal',ang=0,phase=0,vx=(Math.random()-.5)*1.8;
   if(type==='fighter'){beh=['zigzag','strafe','charge'][Math.floor(Math.random()*3)];phase=Math.random()*10}
   else if(type==='bomber'){beh=['retreat','circle'][Math.floor(Math.random()*2)];ang=Math.random()*10}
   else if(type==='scout')beh='charge';
   else if(type==='armored'){beh=['circle','zigzag'][Math.floor(Math.random()*2)];ang=Math.random()*10}
   else if(type==='boss'){beh='strafe'}
-  const e={x,y,type,'data':{...d,maxHealth:maxHp,behavior:beh,angle:ang,phase,vx,speed:d.spd,ch2:.015,fled:false,sAtY:false}};
+  const e={x,y,type,data:{...d,maxHp:d.hp,behavior:beh,angle:ang,phase,vx,speed:d.spd,ch2:.015,fled:false,sAtY:false}};
   enemies.push(e);return e
 }
-let enemies=[];
-
-function spawnFuel(){const f={x:Math.random()*(W()-50)+25,y:-15,type:'fuel'};fuelPickups.push(f)}
-function spawnPowerup(){const t=['weapon','life','shield'][Math.floor(Math.random()*3)];const p={x:Math.random()*(W()-50)+25,y:-15,type:'powerup',ptype:t};powerups.push(p)}
-function spawnParticle(x,y,color,life){const p={x,y,vx:(Math.random()-.5)*6,vy:(Math.random()-.5)*6-1,life:rnd(10,20),color,r:rnd(2,5)};particles.push(p)}
+function spawnFuel(){fuelPickups.push({x:Math.random()*(W()-50)+25,y:-15,type:'fuel'})}
+function spawnPowerup(){const t=['weapon','life','shield'][Math.floor(Math.random()*3)];powerups.push({x:Math.random()*(W()-50)+25,y:-15,type:'powerup',ptype:t})}
+function spawnParticle(x,y,color,life){particles.push({x,y,vx:(Math.random()-.5)*6,vy:(Math.random()-.5)*6-1,life:life||rnd(10,20),color,r:rnd(2,5)})}
 function spawnPop(x,y,text){popups.push({x,y,text,life:1000})}
+function rnd(a,b){return a+Math.random()*(b-a)}
 
 // ===== INPUT (Touch + Keyboard) =====
 canvas.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];touch.x=t.clientX;touch.y=t.clientY;touch.down=true;Audio.init();Audio.resume()},{passive:false});
@@ -166,7 +152,7 @@ canvas.addEventListener('mousedown',()=>{Audio.init();Audio.resume()});
 document.addEventListener('keydown',e=>{keys[e.key]=true;if(e.key===' '&&active){shoot();lastShoot=Date.now()}});
 document.addEventListener('keyup',e=>{keys[e.key]=false});
 
-function shoot(){Audio.shoot();for(let i=0;i<weaponLevel&&i<3;i++){const dx=i*12-(weaponLevel-1)*6;spawnBullet(player.x+dx,player.y-26,-1)}}
+function shoot(){Audio.shoot();for(let i=0;i<weaponLevel&&i<3;i++){const dx=i*12-(weaponLevel-1)*6;spawnBullet(player.px+dx,player.py-26,-1)}}
 
 // ===== GAME FUNCTIONS =====
 function startGame(){
@@ -179,13 +165,12 @@ function startGame(){
   comboCount=0;comboTimer=0;difficulty=1;waveNum=0;lastWaveTime=Date.now();waveAnnounceTimer=0;
   invincibleUntil=Date.now()+1500;dist=0;shakeTime=0;
   player={px:W/2,py:H-100};
-  loop();
 }
 
 function loseLife(){
   lives--;invincibleUntil=Date.now()+1500;shakeTime=400;
-  for(let i=0;i<20;i++)spawnParticle(player.x,player.y,'#f00');
-  if(lives<=0){gameOver()}
+  for(let i=0;i<20;i++)spawnParticle(player.px,player.py,'#f00');
+  if(lives<=0)gameOver();
 }
 
 function gameOver(){
@@ -197,24 +182,20 @@ function gameOver(){
 
 // ===== COLLISIONS =====
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
-function aabb(ax,ay,aw,ah,bx,by,bw,bh){return ax<b.x+bw&&ax+aw>b.x&&ay<b.y+bh&&ay+ah>b.y}
 
 function update(){
   if(!active||paused)return;const now=Date.now(),dt=Math.min(now-(loop.lastTime||now),50);loop.lastTime=now;
 
-  // Wave system
   if(now-lastWaveTime>20000){waveNum++;lastWaveTime=now;waveAnnounceTimer=2500;Audio.wave()}
   if(waveAnnounceTimer>0)waveAnnounceTimer-=dt;
 
   difficulty=1+Math.floor(now/30000)*.12;
 
-  // Spawning
   if(now-loop._lastEnemy>Math.max(600,1500/difficulty)){spawnEnemy(Math.random()*W()*.6+W()/2,-40,['fighter','bomber','scout','armored'][Math.floor(Math.random()*4)]);loop._lastEnemy=now}
   if(now-loop._lastBoss>50000){spawnEnemy(W()/2+Math.random()*100-50,-40,'boss');loop._lastBoss=now}
   if(now-loop._lastFuel>9000){spawnFuel();loop._lastFuel=now}
   if(now-loop._lastPw>12000){spawnPowerup();loop._lastPw=now}
 
-  // Player movement (touch stick)
   const dx=touch.x-player.px,dy=touch.y-(player.py-60);
   const mag=Math.hypot(dx,dy)||1;
   player.px+=dx/mag*Math.min(touch.speed*dt/16,30);
@@ -222,27 +203,23 @@ function update(){
   player.px=Math.max(18,Math.min(W()-18,player.px));
   player.py=Math.max(H*.3,Math.min(H-40,player.py));
 
-  // Auto-shoot on touch
   if(touch.down&&now-loop._lastShot>120){shoot();loop._lastShot=now}
 
-  // Update bullets
   for(let i=bullets.length-1;i>=0;i--){
     const b=bullets[i];b.x+=b.vx*dt/16;b.y+=b.vy*dt/16;
     if(b.y<-20||b.x<-20||b.x>W()+20){bullets.splice(i,1);continue}
-    // Bullet vs enemies
     for(let j=enemies.length-1;j>=0;j--){
       const e=enemies[j];const ew=e.type==='boss'?32:e.type==='armored'?20:18;
       if(Math.hypot(b.x-e.x,b.y-e.y)<ew+5){
         e.data.hp--;b._dead=true;spawnParticle(b.x,b.y,'#0f8',12);
         if(e.data.hp<=0){score+=e.data.pts;Audio.explode();for(let k=0;k<25;k++)spawnParticle(e.x,e.y,['#ff0','#f80','#f00'][k%3]);spawnPop(e.x,e.y,'+'+e.data.pts);comboCount++;comboTimer=2500;
-          if(e.data.type==='boss'){shakeTime=600}if(Math.random()<.15)spawnPowerup()
-        }enemies.splice(j,1);break
+          if(e.data.type==='boss')shakeTime=600;if(Math.random()<.15)spawnPowerup()}
+        enemies.splice(j,1);break
       }
     }
   }
   bullets=bullets.filter(b=>!b._dead);
 
-  // Update enemy bullets
   for(let i=bulletsEnemy.length-1;i>=0;i--){
     const b=bulletsEnemy[i];b.x+=b.vx*dt/16;b.y+=b.vy*dt/16;
     if(b.y>H()+20){bulletsEnemy.splice(i,1);continue}
@@ -250,21 +227,18 @@ function update(){
     if(Math.hypot(b.x-player.px,b.y-player.py)<18){Audio.sfx('hit');bulletsEnemy.splice(i,1);loseLife();continue}
   }
 
-  // Update enemies
   for(let i=enemies.length-1;i>=0;i--){
     const e=enemies[i];const d=e.data;let vy=d.spd*dt/16,vx=0;
     if(d.behavior==='zigzag'){d.phase=(d.phase||0)+dt/500;vx=Math.sin(d.phase)*2.5*dt/16}
     else if(d.behavior==='retreat'){vy=(e.y<H()*.5)?d.spd:0;vx=d.spd*1.5*dt/16}
-    else if(d.behavior==='charge'){vy=d.spd*dt/16*(e.y<H()*.4?(1+difficulty*.3):(3+difficulty*.5))}
+    else if(d.behavior==='charge'){const m=e.y<H()*.4?(1+difficulty*.3):(3+difficulty*.5);vy=d.spd*m*dt/16}
     else if(d.behavior==='circle'){d.angle=(d.angle||0)+dt/800;vx=Math.cos(d.angle)*1.2*dt/16}
-    else if(d.behavior==='strafe'){if(e.y<80+Math.random()*40){vy=d.spd*dt/16}else if(!d.sAtY){d.sAtY=e.y;spawnEnemyBullet(e.x,e.y+16)}else if(d.ch2&&Math.random()<d.ch2*dt/16){spawnEnemyBullet(e.x,e.y+16)}else if(!d.fled){vx=(Math.random()>.5?1:-1)*d.spd*dt/16;d.fled=true}else{vy=d.spd*.2*dt/16}}
+    else if(d.behavior==='strafe'){if(e.y<80+Math.random()*40)vy=d.spd*dt/16;else if(!d.sAtY){d.sAtY=e.y;spawnEnemyBullet(e.x,e.y+16)}else if(d.ch2&&Math.random()<d.ch2*dt/16){spawnEnemyBullet(e.x,e.y+16)}else if(!d.fled){vx=(Math.random()>.5?1:-1)*d.spd*dt/16;d.fled=true}else{vy=d.spd*.2*dt/16}}
     else{vx=(Math.random()-.5)*.8}
-
     e.x+=vx*dt/16;e.y+=vy*dt/16;
-    if(d.ch){const leadX=player.px+(player.px-e.x)*.3;spawnEnemyBullet(e.x,e.y+16)}
+    if(d.ch){spawnEnemyBullet(e.x,e.y+16)}
     if(d.shootCh&&Math.random()<d.shootCh*dt/16)spawnEnemyBullet(e.x,e.y+16);
     if(e.y>H()+50||e.x<-50||e.x>W()+50){enemies.splice(i,1);continue}
-    // Player collision
     if(now<invincibleUntil)continue;
     const pw=16,ph=26;
     if(Math.abs(e.x-player.px)<ew+pw&&Math.abs(e.y-player.py)<18+ph){
@@ -273,14 +247,12 @@ function update(){
     }
   }
 
-  // Fuel pickups
   for(let i=fuelPickups.length-1;i>=0;i--){
     const f=fuelPickups[i];f.y+=2*dt/16;
     if(Math.hypot(f.x-player.px,f.y-player.py)<20){fuel=Math.min(100,fuel+35);Audio.powerup();spawnPop(f.x,f.y,'FUEL');fuelPickups.splice(i,1);continue}
     if(f.y>H()+20)fuelPickups.splice(i,1)
   }
 
-  // Powerups
   for(let i=powerups.length-1;i>=0;i--){
     const p=powerups[i];p.y+=2*dt/16;
     if(Math.hypot(p.x-player.px,p.y-player.py)<20){
@@ -292,24 +264,20 @@ function update(){
     if(p.y>H()+20)powerups.splice(i,1)
   }
 
-  // Particles
   for(let i=particles.length-1;i>=0;i--){
     const p=particles[i];p.x+=p.vx*dt/16;p.y+=p.vy*dt/16;p.vy+=.12;p.life-=dt;
     if(p.life<=0){particles.splice(i,1);continue}
   }
 
-  // Popups
   for(let i=popups.length-1;i>=0;i--){
     const p=popups[i];p.y-=1*dt/16;p.life-=dt;
     if(p.life<=0){popups.splice(i,1);continue}
   }
 
-  // Timers
   comboTimer>0?comboTimer-=dt:(comboCount=0);
   if(now-(loop._lastFuel||now)>1000){fuel=Math.max(0,fuel-1);loop._lastFuel=now;if(fuel<=0)loseLife()}
   dist+=dt/1e3;shakeTime>0?shakeTime-=dt:0;shieldActive?(shieldTimer-=dt,shieldTimer<=0&&!(shieldActive=false)):0;
 
-  // HUD
   document.getElementById('sc').textContent=score;document.getElementById('hs2').textContent=highScore;
   document.getElementById('fuel').style.width=fuel+'%';
   document.getElementById('lives').textContent='♥ '+lives;
@@ -322,7 +290,6 @@ function render(){
   if(shakeTime>0){ctx.save();ctx.translate((Math.random()-.5)*6,((Math.random()-.5)*6));}
   starfield();
 
-  // Terrain (parallax mountains)
   const moonY=H*0.15;ctx.fillStyle='#1a2';ctx.beginPath();
   for(let i=0;i<=W;i+=4){const h=Math.sin((i+Date.now()*.01)*.01)*30+Math.sin((i+Date.now()*.02)*.03)*15;ctx.lineTo(i,moonY-h+H*0.6)}
   ctx.lineTo(W,moonY+H);ctx.lineTo(0,moonY+H);ctx.fill();
@@ -331,33 +298,26 @@ function render(){
   for(let i=0;i<=W;i+=4){const h=Math.sin((i+Date.now()*.02)*.015)*40+Math.sin((i+Date.now()*.03)*.025)*20;ctx.lineTo(i,H*.75-h+10)}
   ctx.lineTo(W,moonY+H);ctx.lineTo(0,moonY+H);ctx.fill();
 
-  // Road
   ctx.fillStyle='#333';ctx.fillRect(W/2-28,0,56,H);
   ctx.strokeStyle='#aa0';ctx.setLineDash([16,12]);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);
 
-  // Entities
   enemies.forEach(e=>drawEnemy(e));
   bullets.forEach(b=>{ctx.fillStyle='#0f8';ctx.beginPath();ctx.arc(b.x,b.y,4,0,Math.PI*2);ctx.fill()});
   bulletsEnemy.forEach(b=>{ctx.fillStyle='#f33';ctx.beginPath();ctx.arc(b.x,b.y,4,0,Math.PI*2);ctx.fill()});
 
-  // Fuel pickups
   fuelPickups.forEach(f=>{ctx.fillStyle='#0ff';ctx.beginPath();ctx.arc(f.x,f.y,8,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.stroke()});
 
-  // Powerups
   powerups.forEach(p=>{
     const c=p.ptype==='weapon'?'#0f0':p.ptype==='life'?'#f0f':'#08f';
     ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x,p.y,10,0,Math.PI*2);ctx.fill();
     ctx.fillStyle='rgba(255,255,255,.3)';ctx.beginPath();ctx.arc(p.x-3,p.y-3,4,0,Math.PI*2);ctx.fill()
   });
 
-  // Particles
   particles.forEach(p=>{ctx.globalAlpha=Math.min(1,p.life/20);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.r*(p.life/20),0,Math.PI*2);ctx.fill()});
   ctx.globalAlpha=1;
 
-  // Popups
   popups.forEach(p=>{ctx.globalAlpha=Math.min(1,p.life/500);ctx.fillStyle='#ff0';ctx.font='bold 16px Arial';ctx.textAlign='center';ctx.fillText(p.text,p.x,p.y);ctx.globalAlpha=1});
 
-  // Player
   drawPlayer();
 
   if(shakeTime>0)ctx.restore();
@@ -365,20 +325,22 @@ function render(){
 
 loop={lastTime:Date.now(),_lastEnemy:Date.now(),_lastBoss:Date.now(),_lastFuel:Date.now(),_lastPw:Date.now(),_lastShot:0};
 
-// ===== GAME LOOP =====
 function loop(){
   requestAnimationFrame(loop);
   update();
   render();
 }
 
-// Initial draw
 requestAnimationFrame(function boot(){
   if(!active){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);starfield()}
   setTimeout(boot,16)
 })();
 
 document.getElementById('hs').textContent=highScore;
+
+// Click handler for the overlay
+document.getElementById('overlay').addEventListener('click',function(){startGame()});
+document.getElementById('gameover').addEventListener('click',function(){startGame()});
 </script>
 </body>
 </html>
