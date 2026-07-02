@@ -887,10 +887,11 @@ function gameLoop(){
   render();
 }
 
-requestAnimationFrame(function boot(){
+function boot(){
   if(!active){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);starfield();document.getElementById('hs').textContent=highScore}
   setTimeout(boot,16)
-})();
+}
+setTimeout(boot,16);
 
 document.getElementById('hs').textContent=highScore;
 document.getElementById('hfs').textContent=highScore;
