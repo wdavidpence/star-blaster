@@ -196,19 +196,63 @@ function starfield(){
 }
 
 function drawTerrain(){
-  const scroll=travelled*2.2; // downward scroll speed
+  const scroll=travelled*2.4; // downward scroll speed
   ctx.save();
-  // Layer 1: far mountains (slow)
-  ctx.fillStyle='#0a1a12';
-  for(let i=-3;i<7;i++){
-    const y=H*0.48 + ((scroll*0.25)%(H*0.35));
-    const x=(i*180)%(W+180)-90;
+  // Layer 1: far mountains (slow) - vertical scroll only
+  ctx.fillStyle="#0a1a12";
+  for(let i=-3;i<6;i++){
+    const yOff = ((scroll*0.28) % 95);
+    const baseY = H*0.47 + yOff + (i * 95);
     ctx.beginPath();
-    ctx.moveTo(x,y);
-    ctx.lineTo(x+90,y-38);
-    ctx.lineTo(x+180,y);
+    ctx.moveTo(W*0.12, baseY);
+    ctx.lineTo(W*0.32, baseY-44);
+    ctx.lineTo(W*0.52, baseY);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(W*0.48, baseY);
+    ctx.lineTo(W*0.68, baseY-40);
+    ctx.lineTo(W*0.88, baseY);
     ctx.fill();
   }
+  // Layer 2: mid terrain ridges - vertical scroll only
+  ctx.fillStyle="#112a1f";
+  for(let i=-3;i<6;i++){
+    const yOff = ((scroll*0.52) % 82);
+    const baseY = H*0.55 + yOff + (i * 82);
+    ctx.beginPath();
+    ctx.moveTo(W*0.08, baseY);
+    ctx.lineTo(W*0.24, baseY-58);
+    ctx.lineTo(W*0.40, baseY);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(W*0.52, baseY);
+    ctx.lineTo(W*0.68, baseY-50);
+    ctx.lineTo(W*0.84, baseY);
+    ctx.fill();
+  }
+  // Layer 3: near ground + road (moving down)
+  ctx.fillStyle="#1a3a2a";
+  ctx.fillRect(0,H*0.62,W,H*0.38);
+  // Road scrolling vertically
+  ctx.fillStyle="#223322";
+  ctx.fillRect(W/2-26,H*0.62,52,H*0.38);
+  ctx.strokeStyle="#335533";
+  ctx.lineWidth=2;
+  ctx.setLineDash([18,14]);
+  ctx.beginPath();
+  const roadOffset=(scroll*0.95)%36;
+  ctx.moveTo(W/2,H*0.62-roadOffset);
+  ctx.lineTo(W/2,H-roadOffset);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Road edge lines
+  ctx.strokeStyle="#445544";
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.rect(W/2-26,H*0.62,52,H*0.38);
+  ctx.stroke();
+  ctx.restore();
+}
   // Layer 2: mid terrain ridges
   ctx.fillStyle='#112a1f';
   for(let i=-3;i<7;i++){
