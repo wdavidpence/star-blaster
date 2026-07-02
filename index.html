@@ -114,7 +114,7 @@ function syncHighScoreDom(){const a=document.getElementById('hs');const b=docume
 if(document.readyState!=='loading')syncHighScoreDom();else document.addEventListener('DOMContentLoaded',syncHighScoreDom);
 
 // ===== ENTITIES =====
-let player=null,bullets=[],bulletsEnemy=[],powerups=[],fuelPickups=[],particles=[],popups=[],enemies=[];
+let player=null,bullets=[],bulletsEnemy=[],powerups=[],fuelPickups=[],particles=[],popups=[],enemies=[],groundEnemies=[];
 
 // ===== AUDIO (Web Audio API) =====
 window.GameAudio={
@@ -195,6 +195,52 @@ function starfield(){
   ctx.restore();
 }
 
+function drawTerrain(){
+  const t=Date.now();
+  const scroll=travelled*0.8; // downward scroll speed
+  ctx.save();
+  // Layer 1: far mountains (slow)
+  ctx.fillStyle='#0a1a12';
+  for(let i=-2;i<6;i++){
+    const x=(i*180 - (scroll*0.25)%180);
+    ctx.beginPath();
+    ctx.moveTo(x,H*0.48);
+    ctx.lineTo(x+90,H*0.48-38);
+    ctx.lineTo(x+180,H*0.48);
+    ctx.fill();
+  }
+  // Layer 2: mid terrain ridges
+  ctx.fillStyle='#112a1f';
+  for(let i=-2;i<6;i++){
+    const x=(i*140 - (scroll*0.45)%140);
+    ctx.beginPath();
+    ctx.moveTo(x,H*0.55);
+    ctx.lineTo(x+70,H*0.55-52);
+    ctx.lineTo(x+140,H*0.55);
+    ctx.fill();
+  }
+  // Layer 3: near ground + road
+  ctx.fillStyle='#1a3a2a';
+  ctx.fillRect(0,H*0.62,W,H*0.38);
+  // Road
+  ctx.fillStyle='#223322';
+  ctx.fillRect(W/2-26,H*0.62,52,H*0.38);
+  ctx.strokeStyle='#335533';
+  ctx.lineWidth=2;
+  ctx.setLineDash([18,14]);
+  ctx.beginPath();
+  ctx.moveTo(W/2,H*0.62);
+  ctx.lineTo(W/2,H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Road edge lines
+  ctx.strokeStyle='#445544';
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.rect(W/2-26,H*0.62,52,H*0.38);
+  ctx.stroke();
+  ctx.restore();
+}
 
 function drawPlayer(){
   if(!player)return;const{px,py}=player;
@@ -296,7 +342,9 @@ function drawEnemy(e){
 
 // ===== SPAWNING =====
 function spawnBullet(x,y,dir=-1,opts={}){bullets.push({x,y,vx:opts.vx??0,vy:opts.vy??(8*dir),type:'player',color:opts.color||'#0f8',mode:opts.mode||'normal',speed:opts.speed||Math.abs(opts.vy??(8*dir)),trail:0});if(bullets.length>bulletCap)bullets.splice(0,bullets.length-bulletCap)}
+function spawnBomb(x,y){bullets.push({x,y,vx:0,vy:4.5,type:"bomb",color:"#ff0",mode:"bomb"});}
 function spawnEnemyBullet(x,y){bulletsEnemy.push({x,y,vx:(Math.random()-.5)*2,vy:3,type:'enemy'});if(bulletsEnemy.length>bulletCap)bulletsEnemy.splice(0,bulletsEnemy.length-bulletCap)}
+function spawnGroundEnemy(x,y,type){const d={hp:3,pts:120,type};groundEnemies.push({x,y,type,v:1.6,hp:d.hp,pts:d.pts});if(groundEnemies.length>12)groundEnemies.shift();}
 function spawnEnemy(x,y,type){
   const types={fighter:{hp:1,spd:3.4,pts:70,ch:.006},bomber:{hp:2,spd:1.7,pts:170,ch:.01},scout:{hp:1,spd:5.2,pts:90,ch:.008},armored:{hp:5,spd:1.2,pts:250,ch:.006},dive:{hp:2,spd:3.0,pts:140,ch:.012},sweeper:{hp:3,spd:2.2,pts:220,shootCh:.018},weave:{hp:2,spd:2.7,pts:160,ch:.01},bonus:{hp:1,spd:2.0,pts:650,ch:.016,bonus:true},boss:{hp:14,spd:.6,pts:1400,ch:.014}};
   const d=types[type]||types.fighter;
@@ -386,7 +434,7 @@ function startGame(){
   document.getElementById('gameover').style.display='none';
   document.getElementById('hud').style.display='block';
   document.getElementById('hud').classList.remove('low-fuel');
-  player=null;enemies=[];bullets=[];bulletsEnemy=[];powerups=[];fuelPickups=[];particles=[];popups=[];
+  player=null;enemies=[],groundEnemies=[];bullets=[];bulletsEnemy=[];powerups=[];fuelPickups=[];particles=[];popups=[];
   active=true;paused=false;score=0;fuel=100;lives=3;weaponLevel=1;shieldActive=false;
   comboCount=0;comboTimer=0;difficulty=1;waveNum=0;lastWaveTime=Date.now();waveAnnounceTimer=7000;
   const wave0=getWaveMeta(0);waveTitle=wave0.title;waveDesc=wave0.desc;
@@ -445,7 +493,8 @@ function update(){
   if(now-timers._lastFuel>8000){spawnFuel();timers._lastFuel=now}
   if(now-timers._lastPw>13500){spawnPowerup();timers._lastPw=now}
 
-  if(touch.down){
+  if(touch.down){if(touch.y>H*0.55){if(now-timers._lastBomb>280){spawnBomb(touch.x,touch.y-30);timers._lastBomb=now}}else{
+  if(now-timers._lastGround>1400&&groundEnemies.length<6){spawnGroundEnemy(W/2+(Math.random()-0.5)*80,H*0.72+Math.random()*40,"turret");timers._lastGround=now}
     const dx=touch.x-player.px,dy=touch.y-(player.py-60);
     const mag=Math.hypot(dx,dy)||1;
     if(mag>10){
@@ -478,7 +527,7 @@ function update(){
     }
     b.x+=b.vx*dt/16;b.y+=b.vy*dt/16;
     if(b.y<-28||b.x<-28||b.x>W+28){bullets.splice(i,1);continue}
-    for(let j=enemies.length-1;j>=0;j--){
+    for(let j=enemies.length-1;j>=0;j--){if(b.mode==="bomb")continue;
       const e=enemies[j];const ew=e.type==='boss'?34:e.type==='armored'?22:19;const hitRadius=ew+8;
       if(Math.hypot(b.x-e.x,b.y-e.y)<hitRadius){
         e.data.hp--;b._dead=true;spawnParticle(b.x,b.y,'#0f8',12);spawnParticle(b.x,b.y,'#fff',6);window.GameAudio.sfx('hit');triggerShake(3,110);e.data.flash=160;
@@ -637,6 +686,7 @@ function render(){
     ctx.translate(-W/2+(Math.random()-.5)*mag,-H/2+(Math.random()-.5)*mag*.75);
   }
   starfield();
+  drawTerrain();
 
   const moonY=H*0.15;ctx.fillStyle='#1a2';ctx.beginPath();
   for(let i=0;i<=W;i+=4){const h=Math.sin((i+Date.now()*.01)*.01)*30+Math.sin((i+Date.now()*.02)*.03)*15;ctx.lineTo(i,moonY-h+H*0.6)}
@@ -690,6 +740,7 @@ function render(){
 
   enemies.forEach(e=>drawEnemy(e));
   enemies.forEach(e=>{
+  groundEnemies.forEach(g=>{ctx.fillStyle="#555";ctx.fillRect(g.x-10,g.y-6,20,12);ctx.fillStyle="#0a0";ctx.fillRect(g.x-4,g.y-3,8,6);});
     if(e.data.flash>0){
       ctx.save();
       ctx.globalCompositeOperation='lighter';
@@ -706,7 +757,7 @@ function render(){
       ctx.restore();
     }
   });
-  bullets.forEach(b=>{ctx.save();ctx.globalCompositeOperation='lighter';ctx.fillStyle=b.color||'#0f8';ctx.beginPath();ctx.arc(b.x,b.y,b.mode==='homing'?5.5:b.mode==='spread'?4.5:4,0,Math.PI*2);ctx.fill();if(b.mode==='homing'){ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(b.x,b.y,7,0,Math.PI*2);ctx.stroke()}ctx.restore()});
+  bullets.forEach(b=>{if(b.mode==="bomb"){ctx.fillStyle=b.color;ctx.fillRect(b.x-3,b.y-5,6,10);ctx.fillStyle="#ff0";ctx.fillRect(b.x-1,b.y-2,2,4);return}ctx.save();ctx.globalCompositeOperation='lighter';ctx.fillStyle=b.color||'#0f8';ctx.beginPath();ctx.arc(b.x,b.y,b.mode==='homing'?5.5:b.mode==='spread'?4.5:4,0,Math.PI*2);ctx.fill();if(b.mode==='homing'){ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(b.x,b.y,7,0,Math.PI*2);ctx.stroke()}ctx.restore()});
   bulletsEnemy.forEach(b=>{ctx.fillStyle='#f33';ctx.beginPath();ctx.arc(b.x,b.y,4,0,Math.PI*2);ctx.fill()});
 
   fuelPickups.forEach(f=>{const pulse=1+Math.sin(Date.now()/140+f.pulse)*.15;ctx.save();ctx.globalCompositeOperation='lighter';ctx.fillStyle='rgba(255,245,80,.18)';ctx.beginPath();ctx.arc(f.x,f.y,18*pulse,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff75a';ctx.beginPath();ctx.arc(f.x,f.y,11*pulse,0,Math.PI*2);ctx.fill();ctx.fillStyle='#b6ff3a';ctx.beginPath();ctx.arc(f.x+3,f.y-3,5*pulse,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.beginPath();ctx.arc(f.x,f.y,12*pulse,0,Math.PI*2);ctx.stroke();ctx.restore()});
@@ -879,7 +930,7 @@ function render(){
   if(shakeTime>0)ctx.restore();
 }
 
-const timers={lastTime:Date.now(),_lastEnemy:Date.now(),_lastBoss:Date.now(),_lastFuel:Date.now(),_lastPw:Date.now(),_lastShot:0,_lastTrail:0,_bossWaveSpawnedFor:-1};
+const timers={_lastBomb:0,_lastGround:0,lastTime:Date.now(),_lastEnemy:Date.now(),_lastBoss:Date.now(),_lastFuel:Date.now(),_lastPw:Date.now(),_lastShot:0,_lastTrail:0,_bossWaveSpawnedFor:-1};
 
 function gameLoop(){
   requestAnimationFrame(gameLoop);
@@ -888,7 +939,8 @@ function gameLoop(){
 }
 
 function boot(){
-  if(!active){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);starfield();document.getElementById('hs').textContent=highScore}
+  if(!active){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);starfield();
+  drawTerrain();document.getElementById('hs').textContent=highScore}
   setTimeout(boot,16)
 }
 setTimeout(boot,16);
