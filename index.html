@@ -1,4 +1,4 @@
-<!-- v0.0.31 -->
+<!-- v0.0.35 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -196,41 +196,43 @@ function starfield(){
 }
 
 function drawTerrain(){
-  const t=Date.now();
-  const scroll=travelled*1.8; // downward scroll speed
+  const scroll=travelled*2.2; // downward scroll speed
   ctx.save();
   // Layer 1: far mountains (slow)
   ctx.fillStyle='#0a1a12';
-  for(let i=-2;i<6;i++){
-    const x=(i*180 - (scroll*0.25)%180);
+  for(let i=-3;i<7;i++){
+    const y=H*0.48 + ((scroll*0.25)%(H*0.35));
+    const x=(i*180)%(W+180)-90;
     ctx.beginPath();
-    ctx.moveTo(x,H*0.48);
-    ctx.lineTo(x+90,H*0.48-38);
-    ctx.lineTo(x+180,H*0.48);
+    ctx.moveTo(x,y);
+    ctx.lineTo(x+90,y-38);
+    ctx.lineTo(x+180,y);
     ctx.fill();
   }
   // Layer 2: mid terrain ridges
   ctx.fillStyle='#112a1f';
-  for(let i=-2;i<6;i++){
-    const x=(i*140 - (scroll*0.45)%140);
+  for(let i=-3;i<7;i++){
+    const y=H*0.55 + ((scroll*0.45)%(H*0.32));
+    const x=(i*140)%(W+140)-70;
     ctx.beginPath();
-    ctx.moveTo(x,H*0.55);
-    ctx.lineTo(x+70,H*0.55-52);
-    ctx.lineTo(x+140,H*0.55);
+    ctx.moveTo(x,y);
+    ctx.lineTo(x+70,y-52);
+    ctx.lineTo(x+140,y);
     ctx.fill();
   }
-  // Layer 3: near ground + road
+  // Layer 3: near ground + road (moving down)
   ctx.fillStyle='#1a3a2a';
   ctx.fillRect(0,H*0.62,W,H*0.38);
-  // Road
+  // Road scrolling vertically
   ctx.fillStyle='#223322';
   ctx.fillRect(W/2-26,H*0.62,52,H*0.38);
   ctx.strokeStyle='#335533';
   ctx.lineWidth=2;
   ctx.setLineDash([18,14]);
   ctx.beginPath();
-  ctx.moveTo(W/2,H*0.62);
-  ctx.lineTo(W/2,H);
+  const roadOffset=(scroll*0.9)%36;
+  ctx.moveTo(W/2,H*0.62-roadOffset);
+  ctx.lineTo(W/2,H-roadOffset);
   ctx.stroke();
   ctx.setLineDash([]);
   // Road edge lines
